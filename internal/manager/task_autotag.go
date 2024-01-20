@@ -183,11 +183,13 @@ func (j *autoTagJob) autoTagPerformers(ctx context.Context, progress *job.Progre
 					if err := tagger.PerformerScenes(ctx, performer, paths, r.Scene); err != nil {
 						return fmt.Errorf("processing scenes: %w", err)
 					}
-					if err := tagger.PerformerImages(ctx, performer, paths, r.Image); err != nil {
-						return fmt.Errorf("processing images: %w", err)
-					}
+
 					if err := tagger.PerformerGalleries(ctx, performer, paths, r.Gallery); err != nil {
 						return fmt.Errorf("processing galleries: %w", err)
+					}
+
+					if err := tagger.PerformerImages(ctx, performer, paths, r.Image); err != nil {
+						return fmt.Errorf("processing images: %w", err)
 					}
 
 					return nil
@@ -281,12 +283,15 @@ func (j *autoTagJob) autoTagStudios(ctx context.Context, progress *job.Progress,
 					if err := tagger.StudioScenes(ctx, studio, paths, aliases, r.Scene); err != nil {
 						return fmt.Errorf("processing scenes: %w", err)
 					}
-					if err := tagger.StudioImages(ctx, studio, paths, aliases, r.Image); err != nil {
-						return fmt.Errorf("processing images: %w", err)
-					}
+
 					if err := tagger.StudioGalleries(ctx, studio, paths, aliases, r.Gallery); err != nil {
 						return fmt.Errorf("processing galleries: %w", err)
 					}
+
+					if err := tagger.StudioImages(ctx, studio, paths, aliases, r.Image); err != nil {
+						return fmt.Errorf("processing images: %w", err)
+					}
+
 
 					return nil
 				}()
@@ -378,11 +383,13 @@ func (j *autoTagJob) autoTagTags(ctx context.Context, progress *job.Progress, pa
 					if err := tagger.TagScenes(ctx, tag, paths, aliases, r.Scene); err != nil {
 						return fmt.Errorf("processing scenes: %w", err)
 					}
-					if err := tagger.TagImages(ctx, tag, paths, aliases, r.Image); err != nil {
-						return fmt.Errorf("processing images: %w", err)
-					}
+
 					if err := tagger.TagGalleries(ctx, tag, paths, aliases, r.Gallery); err != nil {
 						return fmt.Errorf("processing galleries: %w", err)
+					}
+
+					if err := tagger.TagImages(ctx, tag, paths, aliases, r.Image); err != nil {
+						return fmt.Errorf("processing images: %w", err)
 					}
 
 					return nil
@@ -748,8 +755,8 @@ func (t *autoTagFilesTask) process(ctx context.Context) {
 	}
 
 	t.processScenes(ctx)
-	t.processImages(ctx)
 	t.processGalleries(ctx)
+	t.processImages(ctx)
 }
 
 type autoTagSceneTask struct {
