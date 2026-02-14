@@ -70,7 +70,15 @@ func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 				logger.Errorf("[generator] writing thumbnail to database for image %s: %s", path, err.Error())
 			}
 		}
+	} else if storageType == config.ImageThumbnailsStoragePrefixed {
+		prefixedDB := mgr.PrefixedThumbnailDB
+		if prefixedDB != nil {
+			if err := prefixedDB.Write(t.Image.Checksum, data); err != nil {
+				logger.Errorf("[generator] writing thumbnail to prefixed database for image %s: %s", path, err.Error())
+			}
+		}
 	} else {
+		// FILESYSTEM mode
 		thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
 		err = fsutil.WriteFile(thumbPath, data)
 		if err != nil {
@@ -107,6 +115,18 @@ func (t *GenerateImageThumbnailTask) required() bool {
 		return true
 	}
 
+	if storageType == config.ImageThumbnailsStoragePrefixed {
+		prefixedDB := mgr.PrefixedThumbnailDB
+		if prefixedDB != nil {
+			exists, err := prefixedDB.Exists(t.Image.Checksum)
+			if err == nil && exists {
+				return false
+			}
+		}
+		return true
+	}
+
+	// FILESYSTEM mode
 	thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
 	exists, _ := fsutil.FileExists(thumbPath)
 

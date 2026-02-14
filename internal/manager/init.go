@@ -121,13 +121,25 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 			return nil, err
 		}
 
-		// Initialize thumbnail database after paths are set up
-		thumbnailDBPath := filepath.Join(mgr.Paths.Generated.Thumbnails, "thumbnails.db")
-		thumbnailDB, err := NewThumbnailDB(thumbnailDBPath)
-		if err != nil {
-			return nil, fmt.Errorf("initializing thumbnail database: %w", err)
+		// Initialize thumbnail storage after paths are set up
+		storageType := mgr.Config.GetImageThumbnailsStorage()
+		if storageType == config.ImageThumbnailsStorageDatabase {
+			// Single database mode
+			thumbnailDBPath := filepath.Join(mgr.Paths.Generated.Thumbnails, "thumbnails.db")
+			thumbnailDB, err := NewThumbnailDB(thumbnailDBPath)
+			if err != nil {
+				return nil, fmt.Errorf("initializing thumbnail database: %w", err)
+			}
+			mgr.ThumbnailDB = thumbnailDB
+		} else if storageType == config.ImageThumbnailsStoragePrefixed {
+			// Prefixed databases mode
+			prefixedDB, err := NewPrefixedThumbnailDB(mgr.Paths.Generated.Thumbnails)
+			if err != nil {
+				return nil, fmt.Errorf("initializing prefixed thumbnail database: %w", err)
+			}
+			mgr.PrefixedThumbnailDB = prefixedDB
 		}
-		mgr.ThumbnailDB = thumbnailDB
+		// FILESYSTEM mode doesn't need any initialization
 
 		mgr.checkSecurityTripwire()
 	} else {

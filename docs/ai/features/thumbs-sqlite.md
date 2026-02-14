@@ -1,116 +1,141 @@
-# Image Thumbnails SQLite Storage
+# Image Thumbnail Storage - Summary & Implementation Plan
 
-This document describes the implementation of storing image thumbnails in a separate SQLite database instead of the filesystem.
+## Problem Statement
 
-## Overview
+Current filesystem-based thumbnail storage has ~1.3 million files in `generated/thumbnails/` directory. This creates issues:
+- Nightmares for backups (millions of small files)
+- Filesystem metadata overhead
+- Slow incremental operations
 
-- **Motivation:** Disks perform better with larger single files vs thousands of small files
-- **Scale:** ~100,000 thumbnails (thousands of galleries, ~100 thumbs per gallery)
-- **Design:** Separate SQLite database (ephemeral, can be rebuilt from source)
+## Options Considered
 
-## Key Design Decisions
+### Option 1: Filesystem (Current Default)
+- **How it works:** JPEG files in `generated/thumbnails/XX/XX/<checksum>_<width>.jpg`
+- **Pros:**
+  - Native OS caching
+  - No extra code needed
+  - Already implemented
+- **Cons:**
+  - 1.3M files = backup nightmare
+  - Filesystem metadata overhead
+  - Slow incremental operations
 
-1. **Separate SQLite database** for thumbnails (not the main database)
-2. Located in `generated/thumbnails.db`
-3. Ephemeral - can be deleted and rebuilt from source images
-4. Keep FILESYSTEM as default for backward compatibility
-5. No migration of existing thumbnails
+### Option 2: Single SQLite Database
+- **How it works:** All thumbnails in one `generated/thumbnails.db`
+- **Pros:**
+  - Single file to backup
+  - Already partially implemented
+- **Cons:**
+  - 44GB+ = too large (SQLite recommends <1GB)
+  - Slow queries at scale
+  - Corruption risk, slow vacuum/backup
 
-## Implementation
+### Option 3: SQLite Per Gallery
+- **How it works:** One DB per gallery at `generated/thumbnails/gallery_<id>.db`
+- **Pros:**
+  - Natural grouping (easy to delete when gallery removed)
+  - Bounded size (~3MB per gallery)
+  - Easy selective backup
+- **Cons:**
+  - Many DB files if many galleries
+  - Connection management overhead
 
-### 1. Configuration
+### Option 4: Prefixed Databases (Recommended)
+- **How it works:** 256 DBs based on checksum prefix: `00.db`, `01.db`, ... `FF.db`
+- **Pros:**
+  - Bounded worst case (256 files max)
+  - ~150MB per DB (manageable)
+  - Fast backup (large sequential writes)
+  - Same locality as filesystem
+- **Cons:**
+  - More complex implementation
+  - Slightly more complex lookup
 
-**File:** `internal/manager/config/enums.go`
+---
 
-Add new enum:
-```go
-type ImageThumbnailsStorageType string
+## Chosen Approach
 
-const (
-    ImageThumbnailsStorageFilesystem ImageThumbnailsStorageType = "FILESYSTEM"
-    ImageThumbnailsStorageDatabase   ImageThumbnailsStorageType = "DATABASE"
-)
-```
+**Give users a choice** with three options:
 
-**File:** `internal/manager/config/config.go`
+| Config Value | Behavior | Best For |
+|--------------|----------|----------|
+| `FILESYSTEM` | Current behavior | Users with small libraries |
+| `DATABASE` | Single SQLite file | Small libraries, testing |
+| `DATABASE_PREFIXED` | 256 DBs based on checksum prefix | **Recommended** - large libraries |
 
-Add config key and getter:
-```go
-ImageThumbnailsStorage = "image_thumbnails_storage"
+**Default:** `FILESYSTEM` (backward compatible)
 
-func (i *Config) GetImageThumbnailsStorage() ImageThumbnailsStorageType
-```
+---
 
-Default: FILESYSTEM (for backward compatibility)
+## Implementation Steps
 
-### 2. Thumbnail Database Module
+### 1. Update Config
+- **File:** `internal/manager/config/enums.go`
+- Add `DATABASE_PREFIXED` to `ImageThumbnailsStorageType` enum
+- Values: `FILESYSTEM`, `DATABASE`, `DATABASE_PREFIXED`
 
-**New file:** `pkg/sqlite/thumbnail_db.go`
+### 2. Update GraphQL Schema
+- **File:** `graphql/schema/types/config.graphql`
+- Add `DATABASE_PREFIXED` to enum
+- Update descriptions for all options
 
-Simple SQLite database with single table:
-```sql
-CREATE TABLE IF NOT EXISTS thumbnails (
-    checksum TEXT PRIMARY KEY,
-    data BLOB NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_thumbnails_checksum ON thumbnails(checksum);
-```
+### 3. Create Prefixed Database Manager
+- **File:** `internal/manager/thumbnail_db.go`
+- Add functions to map checksum → DB file (first 2 chars = hex prefix)
+- Create/open DB on demand: `00.db`, `01.db`, ... `FF.db`
+- Structure: `generated/thumbnails/prefixed/00.db` to `FF.db`
 
-Operations:
-- `Read(checksum string) ([]byte, error)` - Get thumbnail by checksum
-- `Write(checksum string, data []byte) error` - Store thumbnail
-- `Delete(checksum string) error` - Remove thumbnail
-- `GetAllChecksums() ([]string, error)` - Get all stored checksums (for cleanup)
+### 4. Update Routes
+- **File:** `internal/api/routes_image.go`
+- Check `GetImageThumbnailsStorage()`
+- Handle all three modes:
+  - `FILESYSTEM`: existing file-based code
+  - `DATABASE`: existing single-DB code (already implemented)
+  - `DATABASE_PREFIXED`: new prefixed DB logic
 
-### 3. Manager Integration
+### 5. Update Tasks
+- **File:** `internal/manager/task_generate_image_thumbnail.go`
+  - Write to correct storage based on config
+- **File:** `internal/manager/task/clean_generated.go`
+  - Handle cleanup for all three modes
 
-**File:** `internal/manager/manager.go`
+---
 
-- Initialize `ThumbnailDB` in manager initialization
-- Path: `filepath.Join(generatedPath, "thumbnails.db")`
-- Store in manager struct for access by routes and tasks
+## Key Files to Modify
 
-### 4. Thumbnail Serving
+| File | Changes |
+|------|---------|
+| `internal/manager/config/enums.go` | Add `DATABASE_PREFIXED` enum value |
+| `graphql/schema/types/config.graphql` | Add enum value + descriptions |
+| `internal/manager/thumbnail_db.go` | Add prefixed DB management functions |
+| `internal/api/routes_image.go` | Handle all 3 modes |
+| `internal/manager/task_generate_image_thumbnail.go` | Support all modes |
+| `internal/manager/task/clean_generated.go` | Support all modes |
 
-**File:** `internal/api/routes_image.go`
+---
 
-Modify `serveThumbnail()` to check config:
-- **DATABASE mode:**
-  - Try reading from `ThumbnailDB` first
-  - If not found, generate and write to `ThumbnailDB`
-- **FILESYSTEM mode:**
-  - Use existing filesystem logic (current behavior)
+## Data Locality Analysis
 
-### 5. Generation Task
+**Filesystem worst case:**
+- 1.3M files across potentially thousands of nested directories
+- Each file = separate filesystem entry (inode, metadata)
+- Backup = millions of small file operations ❌
 
-**File:** `internal/manager/task_generate_image_thumbnail.go`
+**Hash-prefix DB worst case:**
+- 256 DB files maximum (00-FF)
+- Each DB could be ~150MB (if evenly distributed)
+- Backup = 256 large file operations ✅
 
-When `GetImageThumbnailsStorage() == DATABASE`:
-- Write to `ThumbnailDB` instead of filesystem
-- Use existing checksum-based lookup
+**Both approaches have the same locality problem** - there's no guarantee images from one gallery share the same prefix. But **hash-prefix is definitively better** because:
+- Bounded worst case (256 files max)
+- Much faster backup (large sequential writes)
+- Less filesystem overhead
+- Same locality as filesystem (neither is worse)
 
-### 6. Cleanup Task
+---
 
-**File:** `internal/manager/task/clean_thumbnails.go`
+## Migration Path
 
-New cleanup task to remove orphaned thumbnails:
-- Get all checksums from `ThumbnailDB`
-- Compare with checksums of existing images in database
-- Delete thumbnails that no longer have corresponding images
-
-Triggered via existing cleanup job system.
-
-## Storage Comparison
-
-| Aspect | Generated (FILESYSTEM) | New (DATABASE) |
-|--------|----------------------|----------------|
-| Location | `generated/thumbnails/` | `generated/thumbnails.db` |
-| Format | JPEG files | SQLite blob |
-| Backup | Manual | Single file backup |
-| Performance | Many file operations | Single DB query |
-
-## Future Improvements
-
-- Consider WAL mode for better concurrent read performance
-- Add compression for thumbnail data if needed
-- Consider cache size configuration for SQLite
+- Allow existing filesystem thumbnails to remain
+- New thumbnails go to selected storage type
+- Users can manually migrate via "Clean Generated" task after switching

@@ -47,6 +47,10 @@ type CleanGeneratedJob struct {
 		GetAllChecksums(ctx context.Context) ([]string, error)
 		Delete(checksum string) error
 	}
+	PrefixedThumbnailDB interface {
+		GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
+		Delete(checksum string) error
+	}
 	Repository models.Repository
 
 	dryRunPrefix  string
@@ -677,9 +681,13 @@ func (j *CleanGeneratedJob) cleanThumbnailFiles(ctx context.Context, progress *j
 
 	logger.Infof("Cleaning image thumbnail files")
 
-	// Handle DATABASE storage mode
+	// Handle DATABASE storage modes
 	if j.ImageThumbnailsStorage == config.ImageThumbnailsStorageDatabase {
 		return j.cleanThumbnailDatabase(ctx, progress)
+	}
+
+	if j.ImageThumbnailsStorage == config.ImageThumbnailsStoragePrefixed {
+		return j.cleanThumbnailPrefixedDatabase(ctx, progress)
 	}
 
 	// FILESYSTEM storage mode (original behavior)
@@ -719,6 +727,46 @@ func (j *CleanGeneratedJob) cleanThumbnailDatabase(ctx context.Context, progress
 			j.logDelete("deleting unused thumbnail from database: %s", checksum)
 			if err := j.ThumbnailDB.Delete(checksum); err != nil {
 				logger.Errorf("error deleting thumbnail from database: %v", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (j *CleanGeneratedJob) cleanThumbnailPrefixedDatabase(ctx context.Context, progress *job.Progress) error {
+	if j.PrefixedThumbnailDB == nil {
+		logger.Warn("Prefixed thumbnail database not available for cleanup")
+		return nil
+	}
+
+	logger.Infof("Cleaning image thumbnail prefixed database")
+
+	thumbnailChecksums, err := j.PrefixedThumbnailDB.GetAllChecksumsAllDBs(ctx)
+	if err != nil {
+		return fmt.Errorf("getting thumbnail checksums: %w", err)
+	}
+
+	total := len(thumbnailChecksums)
+	progress.SetTotal(total)
+
+	for _, checksum := range thumbnailChecksums {
+		if job.IsCancelled(ctx) {
+			return nil
+		}
+
+		progress.AddProcessed(1)
+
+		exists, err := j.getImagesWithHash(ctx, checksum)
+		if err != nil {
+			logger.Errorf("error checking image entry: %v", err)
+			continue
+		}
+
+		if len(exists) == 0 {
+			j.logDelete("deleting unused thumbnail from prefixed database: %s", checksum)
+			if err := j.PrefixedThumbnailDB.Delete(checksum); err != nil {
+				logger.Errorf("error deleting thumbnail from prefixed database: %v", err)
 			}
 		}
 	}

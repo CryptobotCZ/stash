@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stashapp/stash/pkg/fsutil"
@@ -14,11 +17,20 @@ import (
 const thumbnailTable = "thumbnails"
 const thumbnailChecksumColumn = "checksum"
 
+// ThumbnailDB represents a single thumbnail database
 type ThumbnailDB struct {
 	db     *sql.DB
 	dbPath string
 }
 
+// PrefixedThumbnailDB manages multiple thumbnail databases based on checksum prefix
+type PrefixedThumbnailDB struct {
+	basePath string
+	dbs      map[string]*ThumbnailDB
+	mu       sync.RWMutex
+}
+
+// NewThumbnailDB creates a new single thumbnail database
 func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
 	if err := fsutil.EnsureDirAll(filepath.Dir(dbPath)); err != nil {
 		return nil, fmt.Errorf("creating thumbnail db directory: %w", err)
@@ -40,6 +52,185 @@ func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
 		db:     db,
 		dbPath: dbPath,
 	}, nil
+}
+
+// NewPrefixedThumbnailDB creates a manager for prefixed thumbnail databases
+func NewPrefixedThumbnailDB(basePath string) (*PrefixedThumbnailDB, error) {
+	prefixedPath := filepath.Join(basePath, "prefixed")
+	if err := fsutil.EnsureDirAll(prefixedPath); err != nil {
+		return nil, fmt.Errorf("creating prefixed thumbnail db directory: %w", err)
+	}
+
+	logger.Infof("Initialized prefixed thumbnail database at %s", prefixedPath)
+
+	return &PrefixedThumbnailDB{
+		basePath: prefixedPath,
+		dbs:      make(map[string]*ThumbnailDB),
+	}, nil
+}
+
+// getPrefix returns the first 2 characters of the checksum (hex prefix)
+func getPrefix(checksum string) string {
+	if len(checksum) >= 2 {
+		return strings.ToUpper(checksum[:2])
+	}
+	return "00"
+}
+
+// getDBPath returns the database path for a given checksum prefix
+func (p *PrefixedThumbnailDB) getDBPath(prefix string) string {
+	return filepath.Join(p.basePath, prefix+".db")
+}
+
+// getDB returns or creates the database for the given checksum
+func (p *PrefixedThumbnailDB) getDB(checksum string) (*ThumbnailDB, error) {
+	prefix := getPrefix(checksum)
+
+	p.mu.RLock()
+	db, exists := p.dbs[prefix]
+	p.mu.RUnlock()
+
+	if exists {
+		return db, nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if db, exists := p.dbs[prefix]; exists {
+		return db, nil
+	}
+
+	dbPath := p.getDBPath(prefix)
+	newDB, err := NewThumbnailDB(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating prefixed thumbnail db for %s: %w", prefix, err)
+	}
+
+	p.dbs[prefix] = newDB
+	return newDB, nil
+}
+
+// Read reads a thumbnail from the prefixed databases
+func (p *PrefixedThumbnailDB) Read(checksum string) ([]byte, error) {
+	db, err := p.getDB(checksum)
+	if err != nil {
+		return nil, err
+	}
+	return db.Read(checksum)
+}
+
+// Write writes a thumbnail to the prefixed databases
+func (p *PrefixedThumbnailDB) Write(checksum string, data []byte) error {
+	db, err := p.getDB(checksum)
+	if err != nil {
+		return err
+	}
+	return db.Write(checksum, data)
+}
+
+// Delete deletes a thumbnail from the prefixed databases
+func (p *PrefixedThumbnailDB) Delete(checksum string) error {
+	db, err := p.getDB(checksum)
+	if err != nil {
+		return err
+	}
+	return db.Delete(checksum)
+}
+
+// Exists checks if a thumbnail exists in the prefixed databases
+func (p *PrefixedThumbnailDB) Exists(checksum string) (bool, error) {
+	db, err := p.getDB(checksum)
+	if err != nil {
+		return false, err
+	}
+	return db.Exists(checksum)
+}
+
+// GetAllChecksums returns all checksums from all prefixed databases
+func (p *PrefixedThumbnailDB) GetAllChecksums(ctx context.Context) ([]string, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var allChecksums []string
+
+	for prefix, db := range p.dbs {
+		checksums, err := db.GetAllChecksums(ctx)
+		if err != nil {
+			logger.Warnf("Error getting checksums from prefix %s: %v", prefix, err)
+			continue
+		}
+		allChecksums = append(allChecksums, checksums...)
+	}
+
+	return allChecksums, nil
+}
+
+// GetAllChecksumsAllDBs returns checksums from all database files (including unopened ones)
+func (p *PrefixedThumbnailDB) GetAllChecksumsAllDBs(ctx context.Context) ([]string, error) {
+	var allChecksums []string
+
+	// Read all .db files in the prefixed directory
+	entries, err := os.ReadDir(p.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading prefixed directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".db") {
+			continue
+		}
+
+		dbPath := filepath.Join(p.basePath, entry.Name())
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			logger.Warnf("Error opening database %s: %v", dbPath, err)
+			continue
+		}
+
+		query := fmt.Sprintf("SELECT %s FROM %s", thumbnailChecksumColumn, thumbnailTable)
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			db.Close()
+			logger.Warnf("Error querying database %s: %v", dbPath, err)
+			continue
+		}
+
+		for rows.Next() {
+			var checksum string
+			if err := rows.Scan(&checksum); err != nil {
+				rows.Close()
+				db.Close()
+				logger.Warnf("Error scanning checksum: %v", err)
+				continue
+			}
+			allChecksums = append(allChecksums, checksum)
+		}
+		rows.Close()
+		db.Close()
+	}
+
+	return allChecksums, nil
+}
+
+// Close closes all prefixed databases
+func (p *PrefixedThumbnailDB) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var errors []string
+	for prefix, db := range p.dbs {
+		if err := db.Close(); err != nil {
+			errors = append(errors, fmt.Sprintf("error closing db %s: %w", prefix, err))
+		}
+	}
+	p.dbs = make(map[string]*ThumbnailDB)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors closing databases: %s", strings.Join(errors, ", "))
+	}
+	return nil
 }
 
 func createThumbnailTable(db *sql.DB) error {

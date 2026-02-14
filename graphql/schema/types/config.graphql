@@ -62,6 +62,18 @@ enum BlobsStorageType {
   FILESYSTEM
 }
 
+enum ImageThumbnailsStorageType {
+  # thumbnails are stored in the filesystem under the generated directory
+  "Filesystem"
+  FILESYSTEM
+  # thumbnails are stored in a single database file (recommended for small libraries)
+  "Database"
+  DATABASE
+  # thumbnails are stored in 256 prefixed database files based on checksum (recommended for large libraries)
+  "Database (Prefixed)"
+  DATABASE_PREFIXED
+}
+
 input ConfigGeneralInput {
   "Array of file paths to content"
   stashes: [StashConfigInput!]
@@ -85,6 +97,8 @@ input ConfigGeneralInput {
   blobsPath: String
   "Where to store blobs"
   blobsStorage: BlobsStorageType
+  "Where to store image thumbnails"
+  imageThumbnailsStorage: ImageThumbnailsStorageType
   "Path to the ffmpeg binary. If empty, stash will attempt to find it in the path or config directory"
   ffmpegPath: String
   "Path to the ffprobe binary. If empty, stash will attempt to find it in the path or config directory"
@@ -211,6 +225,8 @@ type ConfigGeneralResult {
   blobsPath: String!
   "Where to store blobs"
   blobsStorage: BlobsStorageType!
+  "Where to store image thumbnails"
+  imageThumbnailsStorage: ImageThumbnailsStorageType!
   "Path to the ffmpeg binary. If empty, stash will attempt to find it in the path or config directory"
   ffmpegPath: String!
   "Path to the ffprobe binary. If empty, stash will attempt to find it in the path or config directory"

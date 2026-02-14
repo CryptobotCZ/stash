@@ -54,16 +54,18 @@ type ImageThumbnailsStorageType string
 const (
 	ImageThumbnailsStorageFilesystem ImageThumbnailsStorageType = "FILESYSTEM"
 	ImageThumbnailsStorageDatabase   ImageThumbnailsStorageType = "DATABASE"
+	ImageThumbnailsStoragePrefixed   ImageThumbnailsStorageType = "DATABASE_PREFIXED"
 )
 
 var AllImageThumbnailsStorageType = []ImageThumbnailsStorageType{
 	ImageThumbnailsStorageFilesystem,
 	ImageThumbnailsStorageDatabase,
+	ImageThumbnailsStoragePrefixed,
 }
 
 func (e ImageThumbnailsStorageType) IsValid() bool {
 	switch e {
-	case ImageThumbnailsStorageFilesystem, ImageThumbnailsStorageDatabase:
+	case ImageThumbnailsStorageFilesystem, ImageThumbnailsStorageDatabase, ImageThumbnailsStoragePrefixed:
 		return true
 	}
 	return false

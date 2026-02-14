@@ -56,9 +56,14 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 	mgr := manager.GetInstance()
 	storageType := mgr.Config.GetImageThumbnailsStorage()
 
-	// Handle DATABASE storage mode
+	// Handle DATABASE storage modes
 	if storageType == config.ImageThumbnailsStorageDatabase {
 		rs.serveThumbnailFromDB(w, r, img, modTime)
+		return
+	}
+
+	if storageType == config.ImageThumbnailsStoragePrefixed {
+		rs.serveThumbnailFromPrefixedDB(w, r, img, modTime)
 		return
 	}
 
@@ -100,6 +105,30 @@ func (rs imageRoutes) serveThumbnailFromDB(w http.ResponseWriter, r *http.Reques
 
 	// Not found in database, generate and save
 	rs.generateAndServeThumbnailToDB(w, r, img)
+}
+
+func (rs imageRoutes) serveThumbnailFromPrefixedDB(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	prefixedDB := mgr.PrefixedThumbnailDB
+	if prefixedDB == nil {
+		// Fallback to filesystem if prefixed thumbnail DB is not initialized
+		rs.serveThumbnailFromFilesystem(w, r, img, modTime)
+		return
+	}
+
+	// Try to read from prefixed database first
+	data, err := prefixedDB.Read(img.Checksum)
+	if err == nil {
+		// Found in database, serve it
+		if modTime != nil {
+			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
+		}
+		utils.ServeStaticContent(w, r, data)
+		return
+	}
+
+	// Not found in database, generate and save
+	rs.generateAndServeThumbnailToPrefixedDB(w, r, img)
 }
 
 func (rs imageRoutes) serveThumbnailFromFilesystem(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
@@ -158,6 +187,52 @@ func (rs imageRoutes) generateAndServeThumbnailToDB(w http.ResponseWriter, r *ht
 	// Write to database
 	if err := thumbnailDB.Write(img.Checksum, data); err != nil {
 		logger.Errorf("error writing thumbnail to database for image %s: %v", img.Path, err)
+	}
+
+	// Serve the thumbnail
+	utils.ServeStaticContent(w, r, data)
+}
+
+func (rs imageRoutes) generateAndServeThumbnailToPrefixedDB(w http.ResponseWriter, r *http.Request, img *models.Image) {
+	mgr := manager.GetInstance()
+	prefixedDB := mgr.PrefixedThumbnailDB
+	if prefixedDB == nil {
+		http.Error(w, "prefixed thumbnail database not available", http.StatusInternalServerError)
+		return
+	}
+
+	f := img.Files.Primary()
+	if f == nil {
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// use the image thumbnail generate wait group to limit the number of concurrent thumbnail generation tasks
+	wg := &mgr.ImageThumbnailGenerateWaitGroup
+	wg.Add()
+	defer wg.Done()
+
+	clipPreviewOptions := image.ClipPreviewOptions{
+		InputArgs:  mgr.Config.GetTranscodeInputArgs(),
+		OutputArgs: mgr.Config.GetTranscodeOutputArgs(),
+		Preset:     mgr.Config.GetPreviewPreset().String(),
+	}
+
+	encoder := image.NewThumbnailEncoder(mgr.FFMpeg, mgr.FFProbe, clipPreviewOptions)
+	data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+	if err != nil {
+		if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
+			logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
+		}
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// Write to prefixed database
+	if err := prefixedDB.Write(img.Checksum, data); err != nil {
+		logger.Errorf("error writing thumbnail to prefixed database for image %s: %v", img.Path, err)
 	}
 
 	// Serve the thumbnail
