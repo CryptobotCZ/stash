@@ -123,7 +123,7 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 
 		// Initialize thumbnail database after paths are set up
 		thumbnailDBPath := filepath.Join(mgr.Paths.Generated.Thumbnails, "thumbnails.db")
-		thumbnailDB, err := sqlite.NewThumbnailDB(thumbnailDBPath)
+		thumbnailDB, err := NewThumbnailDB(thumbnailDBPath)
 		if err != nil {
 			return nil, fmt.Errorf("initializing thumbnail database: %w", err)
 		}
