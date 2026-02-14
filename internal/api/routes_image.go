@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/stashapp/stash/internal/manager"
+	"github.com/stashapp/stash/internal/manager/config"
 	"github.com/stashapp/stash/internal/static"
 	"github.com/stashapp/stash/pkg/file"
 	"github.com/stashapp/stash/pkg/fsutil"
@@ -53,6 +54,15 @@ func (rs imageRoutes) Thumbnail(w http.ResponseWriter, r *http.Request) {
 
 func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
 	mgr := manager.GetInstance()
+	storageType := mgr.Config.GetImageThumbnailsStorage()
+
+	// Handle DATABASE storage mode
+	if storageType == config.ImageThumbnailsStorageDatabase {
+		rs.serveThumbnailFromDB(w, r, img, modTime)
+		return
+	}
+
+	// FILESYSTEM storage mode (original behavior)
 	filepath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
 
 	// if the thumbnail doesn't exist, encode on the fly
@@ -64,55 +74,146 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 			utils.ServeStaticFileModTime(w, r, filepath, *modTime)
 		}
 	} else {
-		const useDefault = true
+		rs.generateAndServeThumbnail(w, r, img, filepath, modTime)
+	}
+}
 
-		f := img.Files.Primary()
-		if f == nil {
-			rs.serveImage(w, r, img, useDefault)
-			return
-		}
+func (rs imageRoutes) serveThumbnailFromDB(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	thumbnailDB := mgr.ThumbnailDB
+	if thumbnailDB == nil {
+		// Fallback to filesystem if thumbnail DB is not initialized
+		rs.serveThumbnailFromFilesystem(w, r, img, modTime)
+		return
+	}
 
-		// use the image thumbnail generate wait group to limit the number of concurrent thumbnail generation tasks
-		wg := &mgr.ImageThumbnailGenerateWaitGroup
-		wg.Add()
-		defer wg.Done()
-
-		clipPreviewOptions := image.ClipPreviewOptions{
-			InputArgs:  manager.GetInstance().Config.GetTranscodeInputArgs(),
-			OutputArgs: manager.GetInstance().Config.GetTranscodeOutputArgs(),
-			Preset:     manager.GetInstance().Config.GetPreviewPreset().String(),
-		}
-
-		encoder := image.NewThumbnailEncoder(manager.GetInstance().FFMpeg, manager.GetInstance().FFProbe, clipPreviewOptions)
-		data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
-		if err != nil {
-			// don't log for unsupported image format
-			// don't log for file not found - can optionally be logged in serveImage
-			if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
-				logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
-
-				var exitErr *exec.ExitError
-				if errors.As(err, &exitErr) {
-					logger.Errorf("stderr: %s", string(exitErr.Stderr))
-				}
-			}
-
-			// backwards compatibility - fallback to original image instead
-			rs.serveImage(w, r, img, useDefault)
-			return
-		}
-
-		// write the generated thumbnail to disk if enabled
-		if manager.GetInstance().Config.IsWriteImageThumbnails() {
-			logger.Debugf("writing thumbnail to disk: %s", img.Path)
-			if err := fsutil.WriteFile(filepath, data); err == nil {
-				utils.ServeStaticFile(w, r, filepath)
-				return
-			}
-			logger.Errorf("error writing thumbnail for image %s: %v", img.Path, err)
+	// Try to read from database first
+	data, err := thumbnailDB.Read(img.Checksum)
+	if err == nil {
+		// Found in database, serve it
+		if modTime != nil {
+			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
 		}
 		utils.ServeStaticContent(w, r, data)
+		return
 	}
+
+	// Not found in database, generate and save
+	rs.generateAndServeThumbnailToDB(w, r, img)
+}
+
+func (rs imageRoutes) serveThumbnailFromFilesystem(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	filepath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
+
+	exists, _ := fsutil.FileExists(filepath)
+	if exists {
+		if modTime == nil {
+			utils.ServeStaticFile(w, r, filepath)
+		} else {
+			utils.ServeStaticFileModTime(w, r, filepath, *modTime)
+		}
+	} else {
+		rs.generateAndServeThumbnail(w, r, img, filepath, modTime)
+	}
+}
+
+func (rs imageRoutes) generateAndServeThumbnailToDB(w http.ResponseWriter, r *http.Request, img *models.Image) {
+	mgr := manager.GetInstance()
+	thumbnailDB := mgr.ThumbnailDB
+	if thumbnailDB == nil {
+		http.Error(w, "thumbnail database not available", http.StatusInternalServerError)
+		return
+	}
+
+	f := img.Files.Primary()
+	if f == nil {
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// use the image thumbnail generate wait group to limit the number of concurrent thumbnail generation tasks
+	wg := &mgr.ImageThumbnailGenerateWaitGroup
+	wg.Add()
+	defer wg.Done()
+
+	clipPreviewOptions := image.ClipPreviewOptions{
+		InputArgs:  mgr.Config.GetTranscodeInputArgs(),
+		OutputArgs: mgr.Config.GetTranscodeOutputArgs(),
+		Preset:     mgr.Config.GetPreviewPreset().String(),
+	}
+
+	encoder := image.NewThumbnailEncoder(mgr.FFMpeg, mgr.FFProbe, clipPreviewOptions)
+	data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+	if err != nil {
+		if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
+			logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
+		}
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// Write to database
+	if err := thumbnailDB.Write(img.Checksum, data); err != nil {
+		logger.Errorf("error writing thumbnail to database for image %s: %v", img.Path, err)
+	}
+
+	// Serve the thumbnail
+	utils.ServeStaticContent(w, r, data)
+}
+
+func (rs imageRoutes) generateAndServeThumbnail(w http.ResponseWriter, r *http.Request, img *models.Image, filepath string, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	const useDefault = true
+
+	f := img.Files.Primary()
+	if f == nil {
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// use the image thumbnail generate wait group to limit the number of concurrent thumbnail generation tasks
+	wg := &mgr.ImageThumbnailGenerateWaitGroup
+	wg.Add()
+	defer wg.Done()
+
+	clipPreviewOptions := image.ClipPreviewOptions{
+		InputArgs:  mgr.Config.GetTranscodeInputArgs(),
+		OutputArgs: mgr.Config.GetTranscodeOutputArgs(),
+		Preset:     mgr.Config.GetPreviewPreset().String(),
+	}
+
+	encoder := image.NewThumbnailEncoder(mgr.FFMpeg, mgr.FFProbe, clipPreviewOptions)
+	data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+	if err != nil {
+		// don't log for unsupported image format
+		// don't log for file not found - can optionally be logged in serveImage
+		if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
+			logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
+
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				logger.Errorf("stderr: %s", string(exitErr.Stderr))
+			}
+		}
+
+		// backwards compatibility - fallback to original image instead
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	// write the generated thumbnail to disk if enabled
+	if mgr.Config.IsWriteImageThumbnails() {
+		logger.Debugf("writing thumbnail to disk: %s", img.Path)
+		if err := fsutil.WriteFile(filepath, data); err == nil {
+			utils.ServeStaticFile(w, r, filepath)
+			return
+		}
+		logger.Errorf("error writing thumbnail for image %s: %v", img.Path, err)
+	}
+	utils.ServeStaticContent(w, r, data)
 }
 
 func (rs imageRoutes) Preview(w http.ResponseWriter, r *http.Request) {

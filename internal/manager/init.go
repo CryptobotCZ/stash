@@ -109,6 +109,14 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 		scanSubs: &subscriptionManager{},
 	}
 
+	// Initialize thumbnail database
+	thumbnailDBPath := filepath.Join(mgr.Paths.Generated.Thumbnails, "thumbnails.db")
+	thumbnailDB, err := sqlite.NewThumbnailDB(thumbnailDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("initializing thumbnail database: %w", err)
+	}
+	mgr.ThumbnailDB = thumbnailDB
+
 	if !cfg.IsNewSystem() {
 		logger.Infof("using config file: %s", cfg.GetConfigFile())
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 
+	"github.com/stashapp/stash/internal/manager/config"
 	"github.com/stashapp/stash/pkg/fsutil"
 	"github.com/stashapp/stash/pkg/image"
 	"github.com/stashapp/stash/pkg/logger"
@@ -33,13 +34,14 @@ func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 		return
 	}
 
-	thumbPath := GetInstance().Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
+	mgr := GetInstance()
+	storageType := mgr.Config.GetImageThumbnailsStorage()
+
 	f := t.Image.Files.Primary()
 	path := f.Base().Path
 
 	logger.Debugf("Generating thumbnail for %s", path)
 
-	mgr := GetInstance()
 	c := mgr.Config
 
 	clipPreviewOptions := image.ClipPreviewOptions{
@@ -60,10 +62,20 @@ func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 		return
 	}
 
-	err = fsutil.WriteFile(thumbPath, data)
-	if err != nil {
-		logger.Errorf("[generator] writing thumbnail for image %s: %s", path, err.Error())
-		return
+	// Save based on storage type
+	if storageType == config.ImageThumbnailsStorageDatabase {
+		thumbnailDB := mgr.ThumbnailDB
+		if thumbnailDB != nil {
+			if err := thumbnailDB.Write(t.Image.Checksum, data); err != nil {
+				logger.Errorf("[generator] writing thumbnail to database for image %s: %s", path, err.Error())
+			}
+		}
+	} else {
+		thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
+		err = fsutil.WriteFile(thumbPath, data)
+		if err != nil {
+			logger.Errorf("[generator] writing thumbnail for image %s: %s", path, err.Error())
+		}
 	}
 }
 
@@ -81,7 +93,21 @@ func (t *GenerateImageThumbnailTask) required() bool {
 		return true
 	}
 
-	thumbPath := GetInstance().Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
+	mgr := GetInstance()
+	storageType := mgr.Config.GetImageThumbnailsStorage()
+
+	if storageType == config.ImageThumbnailsStorageDatabase {
+		thumbnailDB := mgr.ThumbnailDB
+		if thumbnailDB != nil {
+			exists, err := thumbnailDB.Exists(t.Image.Checksum)
+			if err == nil && exists {
+				return false
+			}
+		}
+		return true
+	}
+
+	thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
 	exists, _ := fsutil.FileExists(thumbPath)
 
 	return !exists

@@ -51,6 +51,8 @@ const (
 
 	BlobsStorage = "blobs_storage"
 
+	ImageThumbnailsStorage = "image_thumbnails_storage"
+
 	DefaultMaxSessionAge = 60 * 60 * 1 // 1 hours
 
 	Database = "database"
@@ -700,6 +702,17 @@ func (i *Config) GetBlobsStorage() BlobsStorageType {
 		// default to database storage
 		// for legacy systems this is probably the safer option
 		ret = BlobStorageTypeDatabase
+	}
+
+	return ret
+}
+
+func (i *Config) GetImageThumbnailsStorage() ImageThumbnailsStorageType {
+	ret := ImageThumbnailsStorageType(i.getString(ImageThumbnailsStorage))
+
+	if !ret.IsValid() {
+		// default to filesystem for backward compatibility
+		ret = ImageThumbnailsStorageFilesystem
 	}
 
 	return ret

@@ -60,8 +60,9 @@ type Manager struct {
 
 	DLNAService *dlna.Service
 
-	Database   *sqlite.Database
-	Repository models.Repository
+	Database    *sqlite.Database
+	ThumbnailDB *sqlite.ThumbnailDB
+	Repository  models.Repository
 
 	SceneService   SceneService
 	ImageService   ImageService

@@ -39,10 +39,15 @@ type CleanGeneratedJob struct {
 
 	Paths                    *paths.Paths
 	BlobsStorageType         config.BlobsStorageType
+	ImageThumbnailsStorage   config.ImageThumbnailsStorageType
 	VideoFileNamingAlgorithm models.HashAlgorithm
 
 	BlobCleaner BlobCleaner
-	Repository  models.Repository
+	ThumbnailDB interface {
+		GetAllChecksums(ctx context.Context) ([]string, error)
+		Delete(checksum string) error
+	}
+	Repository models.Repository
 
 	dryRunPrefix  string
 	totalTasks    int
@@ -666,6 +671,62 @@ func (j *CleanGeneratedJob) getThumbnailFileHash(basename string) (string, error
 }
 
 func (j *CleanGeneratedJob) cleanThumbnailFiles(ctx context.Context, progress *job.Progress) error {
+	if job.IsCancelled(ctx) {
+		return nil
+	}
+
+	logger.Infof("Cleaning image thumbnail files")
+
+	// Handle DATABASE storage mode
+	if j.ImageThumbnailsStorage == config.ImageThumbnailsStorageDatabase {
+		return j.cleanThumbnailDatabase(ctx, progress)
+	}
+
+	// FILESYSTEM storage mode (original behavior)
+	return j.cleanThumbnailFilesystem(ctx, progress)
+}
+
+func (j *CleanGeneratedJob) cleanThumbnailDatabase(ctx context.Context, progress *job.Progress) error {
+	if j.ThumbnailDB == nil {
+		logger.Warn("Thumbnail database not available for cleanup")
+		return nil
+	}
+
+	logger.Infof("Cleaning image thumbnail database")
+
+	thumbnailChecksums, err := j.ThumbnailDB.GetAllChecksums(ctx)
+	if err != nil {
+		return fmt.Errorf("getting thumbnail checksums: %w", err)
+	}
+
+	total := len(thumbnailChecksums)
+	progress.SetTotal(total)
+
+	for _, checksum := range thumbnailChecksums {
+		if job.IsCancelled(ctx) {
+			return nil
+		}
+
+		progress.AddProcessed(1)
+
+		exists, err := j.getImagesWithHash(ctx, checksum)
+		if err != nil {
+			logger.Errorf("error checking image entry: %v", err)
+			continue
+		}
+
+		if len(exists) == 0 {
+			j.logDelete("deleting unused thumbnail from database: %s", checksum)
+			if err := j.ThumbnailDB.Delete(checksum); err != nil {
+				logger.Errorf("error deleting thumbnail from database: %v", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (j *CleanGeneratedJob) cleanThumbnailFilesystem(ctx context.Context, progress *job.Progress) error {
 	if job.IsCancelled(ctx) {
 		return nil
 	}
