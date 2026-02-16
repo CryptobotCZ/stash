@@ -29,6 +29,15 @@ func (t *GenerateImageThumbnailTask) logStderr(err error) {
 	}
 }
 
+func (t *GenerateImageThumbnailTask) findGalleryID(ctx context.Context) int {
+	mgr := GetInstance()
+	galleries, err := mgr.Repository.Gallery.FindByImageID(ctx, t.Image.ID)
+	if err == nil && len(galleries) > 0 {
+		return galleries[0].ID
+	}
+	return 0
+}
+
 func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 	if !t.required() {
 		return
@@ -77,6 +86,24 @@ func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 				logger.Errorf("[generator] writing thumbnail to prefixed database for image %s: %s", path, err.Error())
 			}
 		}
+	} else if storageType == config.ImageThumbnailsStoragePerGallery {
+		perGalleryDB := mgr.PerGalleryThumbnailDB
+		if perGalleryDB != nil {
+			// Find the gallery this image belongs to
+			galleryID := t.findGalleryID(ctx)
+			if galleryID > 0 {
+				if err := perGalleryDB.Write(galleryID, t.Image.Checksum, data); err != nil {
+					logger.Errorf("[generator] writing thumbnail to per-gallery database for image %s: %s", path, err.Error())
+				}
+			} else {
+				// Fallback to prefixed mode if no gallery found
+				if prefixedDB := mgr.PrefixedThumbnailDB; prefixedDB != nil {
+					if err := prefixedDB.Write(t.Image.Checksum, data); err != nil {
+						logger.Errorf("[generator] writing thumbnail to prefixed database for image %s: %s", path, err.Error())
+					}
+				}
+			}
+		}
 	} else {
 		// FILESYSTEM mode
 		thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
@@ -121,6 +148,28 @@ func (t *GenerateImageThumbnailTask) required() bool {
 			exists, err := prefixedDB.Exists(t.Image.Checksum)
 			if err == nil && exists {
 				return false
+			}
+		}
+		return true
+	}
+
+	if storageType == config.ImageThumbnailsStoragePerGallery {
+		perGalleryDB := mgr.PerGalleryThumbnailDB
+		if perGalleryDB != nil {
+			galleryID := t.findGalleryID(context.Background())
+			if galleryID > 0 {
+				exists, err := perGalleryDB.Exists(galleryID, t.Image.Checksum)
+				if err == nil && exists {
+					return false
+				}
+			} else {
+				// Fallback to prefixed mode
+				if prefixedDB := mgr.PrefixedThumbnailDB; prefixedDB != nil {
+					exists, err := prefixedDB.Exists(t.Image.Checksum)
+					if err == nil && exists {
+						return false
+					}
+				}
 			}
 		}
 		return true

@@ -138,6 +138,13 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 				return nil, fmt.Errorf("initializing prefixed thumbnail database: %w", err)
 			}
 			mgr.PrefixedThumbnailDB = prefixedDB
+		} else if storageType == config.ImageThumbnailsStoragePerGallery {
+			// Per-gallery databases mode
+			perGalleryDB, err := NewPerGalleryThumbnailDB(mgr.Paths.Generated.Thumbnails)
+			if err != nil {
+				return nil, fmt.Errorf("initializing per-gallery thumbnail database: %w", err)
+			}
+			mgr.PerGalleryThumbnailDB = perGalleryDB
 		}
 		// FILESYSTEM mode doesn't need any initialization
 

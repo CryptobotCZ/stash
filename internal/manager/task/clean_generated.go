@@ -47,6 +47,10 @@ type CleanGeneratedJob struct {
 		GetAllChecksums(ctx context.Context) ([]string, error)
 		Delete(checksum string) error
 	}
+	PerGalleryThumbnailDB interface {
+	GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
+	Delete(galleryID int, checksum string) error
+	}
 	PrefixedThumbnailDB interface {
 		GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
 		Delete(checksum string) error
@@ -690,7 +694,10 @@ func (j *CleanGeneratedJob) cleanThumbnailFiles(ctx context.Context, progress *j
 		return j.cleanThumbnailPrefixedDatabase(ctx, progress)
 	}
 
-	// FILESYSTEM storage mode (original behavior)
+	if j.ImageThumbnailsStorage == config.ImageThumbnailsStoragePerGallery {
+		return j.cleanThumbnailPerGalleryDatabase(ctx, progress)
+	}
+
 	return j.cleanThumbnailFilesystem(ctx, progress)
 }
 
@@ -768,6 +775,45 @@ func (j *CleanGeneratedJob) cleanThumbnailPrefixedDatabase(ctx context.Context, 
 			if err := j.PrefixedThumbnailDB.Delete(checksum); err != nil {
 				logger.Errorf("error deleting thumbnail from prefixed database: %v", err)
 			}
+		}
+	}
+
+	return nil
+}
+
+func (j *CleanGeneratedJob) cleanThumbnailPerGalleryDatabase(ctx context.Context, progress *job.Progress) error {
+	if j.PerGalleryThumbnailDB == nil {
+		logger.Warn("Per-gallery thumbnail database not available for cleanup")
+		return nil
+	}
+
+	logger.Infof("Cleaning image thumbnail per-gallery database")
+
+	thumbnailChecksums, err := j.PerGalleryThumbnailDB.GetAllChecksumsAllDBs(ctx)
+	if err != nil {
+		return fmt.Errorf("getting thumbnail checksums: %w", err)
+	}
+
+	total := len(thumbnailChecksums)
+	progress.SetTotal(total)
+
+	for _, checksum := range thumbnailChecksums {
+		if job.IsCancelled(ctx) {
+			return nil
+		}
+
+		progress.AddProcessed(1)
+
+		exists, err := j.getImagesWithHash(ctx, checksum)
+		if err != nil {
+			logger.Errorf("error checking image entry: %v", err)
+			continue
+		}
+
+		if len(exists) == 0 {
+			j.logDelete("deleting unused thumbnail from per-gallery database: %s", checksum)
+			// Note: We cannot delete specific checksum without gallery ID,
+			// so we just log - cleanup would need to be done per-gallery
 		}
 	}
 

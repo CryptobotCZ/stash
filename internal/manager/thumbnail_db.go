@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -27,6 +28,13 @@ type ThumbnailDB struct {
 type PrefixedThumbnailDB struct {
 	basePath string
 	dbs      map[string]*ThumbnailDB
+	mu       sync.RWMutex
+}
+
+// PerGalleryThumbnailDB manages thumbnail databases per gallery
+type PerGalleryThumbnailDB struct {
+	basePath string
+	dbs      map[int]*ThumbnailDB
 	mu       sync.RWMutex
 }
 
@@ -66,6 +74,21 @@ func NewPrefixedThumbnailDB(basePath string) (*PrefixedThumbnailDB, error) {
 	return &PrefixedThumbnailDB{
 		basePath: prefixedPath,
 		dbs:      make(map[string]*ThumbnailDB),
+	}, nil
+}
+
+// NewPerGalleryThumbnailDB creates a manager for per-gallery thumbnail databases
+func NewPerGalleryThumbnailDB(basePath string) (*PerGalleryThumbnailDB, error) {
+	perGalleryPath := filepath.Join(basePath, "per_gallery")
+	if err := fsutil.EnsureDirAll(perGalleryPath); err != nil {
+		return nil, fmt.Errorf("creating per-gallery thumbnail db directory: %w", err)
+	}
+
+	logger.Infof("Initialized per-gallery thumbnail database at %s", perGalleryPath)
+
+	return &PerGalleryThumbnailDB{
+		basePath: perGalleryPath,
+		dbs:      make(map[int]*ThumbnailDB),
 	}, nil
 }
 
@@ -226,6 +249,173 @@ func (p *PrefixedThumbnailDB) Close() error {
 		}
 	}
 	p.dbs = make(map[string]*ThumbnailDB)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors closing databases: %s", strings.Join(errors, ", "))
+	}
+	return nil
+}
+
+// PerGalleryThumbnailDB methods
+
+// getDBPath returns the database path for a given gallery ID
+func (p *PerGalleryThumbnailDB) getDBPath(galleryID int) string {
+	return filepath.Join(p.basePath, fmt.Sprintf("gallery_%d.db", galleryID))
+}
+
+// getDB returns or creates the database for the given gallery ID
+func (p *PerGalleryThumbnailDB) getDB(galleryID int) (*ThumbnailDB, error) {
+	p.mu.RLock()
+	db, exists := p.dbs[galleryID]
+	p.mu.RUnlock()
+
+	if exists {
+		return db, nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if db, exists := p.dbs[galleryID]; exists {
+		return db, nil
+	}
+
+	dbPath := p.getDBPath(galleryID)
+	newDB, err := NewThumbnailDB(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("creating per-gallery thumbnail db for gallery %d: %w", galleryID, err)
+	}
+
+	p.dbs[galleryID] = newDB
+	return newDB, nil
+}
+
+// Read reads a thumbnail from the per-gallery databases
+func (p *PerGalleryThumbnailDB) Read(galleryID int, checksum string) ([]byte, error) {
+	db, err := p.getDB(galleryID)
+	if err != nil {
+		return nil, err
+	}
+	return db.Read(checksum)
+}
+
+// Write writes a thumbnail to the per-gallery databases
+func (p *PerGalleryThumbnailDB) Write(galleryID int, checksum string, data []byte) error {
+	db, err := p.getDB(galleryID)
+	if err != nil {
+		return err
+	}
+	return db.Write(checksum, data)
+}
+
+// Delete deletes a thumbnail from the per-gallery databases
+func (p *PerGalleryThumbnailDB) Delete(galleryID int, checksum string) error {
+	db, err := p.getDB(galleryID)
+	if err != nil {
+		return err
+	}
+	return db.Delete(checksum)
+}
+
+// Exists checks if a thumbnail exists in the per-gallery databases
+func (p *PerGalleryThumbnailDB) Exists(galleryID int, checksum string) (bool, error) {
+	db, err := p.getDB(galleryID)
+	if err != nil {
+		return false, err
+	}
+	return db.Exists(checksum)
+}
+
+// GetAllChecksums returns all checksums from all per-gallery databases
+func (p *PerGalleryThumbnailDB) GetAllChecksums(ctx context.Context) ([]string, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var allChecksums []string
+
+	for galleryID, db := range p.dbs {
+		checksums, err := db.GetAllChecksums(ctx)
+		if err != nil {
+			logger.Warnf("Error getting checksums from gallery %d: %v", galleryID, err)
+			continue
+		}
+		allChecksums = append(allChecksums, checksums...)
+	}
+
+	return allChecksums, nil
+}
+
+// GetAllChecksumsAllDBs returns checksums from all database files (including unopened ones)
+func (p *PerGalleryThumbnailDB) GetAllChecksumsAllDBs(ctx context.Context) ([]string, error) {
+	var allChecksums []string
+
+	// Read all .db files in the per-gallery directory
+	entries, err := os.ReadDir(p.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading per-gallery directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".db") {
+			continue
+		}
+
+		// Extract gallery ID from filename (gallery_<id>.db)
+		name := strings.TrimSuffix(entry.Name(), ".db")
+		if !strings.HasPrefix(name, "gallery_") {
+			continue
+		}
+		galleryIDStr := strings.TrimPrefix(name, "gallery_")
+		_, err := strconv.Atoi(galleryIDStr)
+		if err != nil {
+			continue // Not a gallery database
+		}
+
+		dbPath := filepath.Join(p.basePath, entry.Name())
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			logger.Warnf("Error opening database %s: %v", dbPath, err)
+			continue
+		}
+
+		query := fmt.Sprintf("SELECT %s FROM %s", thumbnailChecksumColumn, thumbnailTable)
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			db.Close()
+			logger.Warnf("Error querying database %s: %v", dbPath, err)
+			continue
+		}
+
+		for rows.Next() {
+			var checksum string
+			if err := rows.Scan(&checksum); err != nil {
+				rows.Close()
+				db.Close()
+				logger.Warnf("Error scanning checksum: %v", err)
+				continue
+			}
+			allChecksums = append(allChecksums, checksum)
+		}
+		rows.Close()
+		db.Close()
+	}
+
+	return allChecksums, nil
+}
+
+// Close closes all per-gallery databases
+func (p *PerGalleryThumbnailDB) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var errors []string
+	for galleryID, db := range p.dbs {
+		if err := db.Close(); err != nil {
+			errors = append(errors, fmt.Sprintf("error closing db for gallery %d: %w", galleryID, err))
+		}
+	}
+	p.dbs = make(map[int]*ThumbnailDB)
 
 	if len(errors) > 0 {
 		return fmt.Errorf("errors closing databases: %s", strings.Join(errors, ", "))

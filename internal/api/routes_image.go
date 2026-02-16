@@ -27,10 +27,15 @@ type ImageFinder interface {
 	FindByChecksum(ctx context.Context, checksum string) ([]*models.Image, error)
 }
 
+type GalleryFinderByImage interface {
+	FindByImageID(ctx context.Context, imageID int) ([]*models.Gallery, error)
+}
+
 type imageRoutes struct {
 	routes
-	imageFinder ImageFinder
-	fileGetter  models.FileGetter
+	imageFinder   ImageFinder
+	fileGetter    models.FileGetter
+	galleryFinder GalleryFinderByImage
 }
 
 func (rs imageRoutes) Routes() chi.Router {
@@ -64,6 +69,11 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 
 	if storageType == config.ImageThumbnailsStoragePrefixed {
 		rs.serveThumbnailFromPrefixedDB(w, r, img, modTime)
+		return
+	}
+
+	if storageType == config.ImageThumbnailsStoragePerGallery {
+		rs.serveThumbnailFromPerGalleryDB(w, r, img, modTime)
 		return
 	}
 
@@ -129,6 +139,45 @@ func (rs imageRoutes) serveThumbnailFromPrefixedDB(w http.ResponseWriter, r *htt
 
 	// Not found in database, generate and save
 	rs.generateAndServeThumbnailToPrefixedDB(w, r, img)
+}
+
+func (rs imageRoutes) serveThumbnailFromPerGalleryDB(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	perGalleryDB := mgr.PerGalleryThumbnailDB
+	if perGalleryDB == nil {
+		rs.serveThumbnailFromFilesystem(w, r, img, modTime)
+		return
+	}
+
+	// Find the gallery this image belongs to
+	var galleryID int
+	if rs.galleryFinder != nil {
+		galleries, err := rs.galleryFinder.FindByImageID(r.Context(), img.ID)
+		if err == nil && len(galleries) > 0 {
+			galleryID = galleries[0].ID
+		}
+	}
+
+	// If no gallery found, fall back to using checksum prefix
+	if galleryID == 0 {
+		// Use prefixed mode as fallback
+		rs.serveThumbnailFromPrefixedDB(w, r, img, modTime)
+		return
+	}
+
+	// Try to read from per-gallery database
+	data, err := perGalleryDB.Read(galleryID, img.Checksum)
+	if err == nil {
+		// Found in database, serve it
+		if modTime != nil {
+			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
+		}
+		utils.ServeStaticContent(w, r, data)
+		return
+	}
+
+	// Not found in database, generate and save
+	rs.generateAndServeThumbnailToPerGalleryDB(w, r, img, galleryID)
 }
 
 func (rs imageRoutes) serveThumbnailFromFilesystem(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
@@ -238,6 +287,50 @@ func (rs imageRoutes) generateAndServeThumbnailToPrefixedDB(w http.ResponseWrite
 	// Serve the thumbnail
 	utils.ServeStaticContent(w, r, data)
 }
+
+func (rs imageRoutes) generateAndServeThumbnailToPerGalleryDB(w http.ResponseWriter, r *http.Request, img *models.Image, galleryID int) {
+	mgr := manager.GetInstance()
+	perGalleryDB := mgr.PerGalleryThumbnailDB
+	if perGalleryDB == nil {
+		http.Error(w, "per-gallery thumbnail database not available", http.StatusInternalServerError)
+		return
+	}
+
+	f := img.Files.Primary()
+	if f == nil {
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	wg := &mgr.ImageThumbnailGenerateWaitGroup
+	wg.Add()
+	defer wg.Done()
+
+	clipPreviewOptions := image.ClipPreviewOptions{
+		InputArgs:  mgr.Config.GetTranscodeInputArgs(),
+		OutputArgs: mgr.Config.GetTranscodeOutputArgs(),
+		Preset:     mgr.Config.GetPreviewPreset().String(),
+	}
+
+	encoder := image.NewThumbnailEncoder(mgr.FFMpeg, mgr.FFProbe, clipPreviewOptions)
+	data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+	if err != nil {
+		if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
+			logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
+		}
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	if err := perGalleryDB.Write(galleryID, img.Checksum, data); err != nil {
+		logger.Errorf("error writing thumbnail to per-gallery database for image %s: %v", img.Path, err)
+	}
+
+	utils.ServeStaticContent(w, r, data)
+}
+
 
 func (rs imageRoutes) generateAndServeThumbnail(w http.ResponseWriter, r *http.Request, img *models.Image, filepath string, modTime *time.Time) {
 	mgr := manager.GetInstance()

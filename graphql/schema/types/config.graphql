@@ -72,6 +72,9 @@ enum ImageThumbnailsStorageType {
   # thumbnails are stored in 256 prefixed database files based on checksum (recommended for large libraries)
   "Database (Prefixed)"
   DATABASE_PREFIXED
+  # thumbnails are stored in separate database files per gallery
+  "Database Per Gallery"
+  DATABASE_PER_GALLERY
 }
 
 input ConfigGeneralInput {
