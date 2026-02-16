@@ -429,7 +429,6 @@ func createThumbnailTable(db *sql.DB) error {
 			%s TEXT PRIMARY KEY,
 			data BLOB NOT NULL
 		);
-		CREATE INDEX IF NOT EXISTS idx_thumbnails_checksum ON %s(%s);
 	`, thumbnailTable, thumbnailChecksumColumn, thumbnailTable, thumbnailChecksumColumn)
 
 	_, err := db.Exec(query)
