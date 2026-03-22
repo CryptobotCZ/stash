@@ -122,6 +122,11 @@ func (r *mutationResolver) MigrateHashNaming(ctx context.Context) (string, error
 	return strconv.Itoa(jobID), nil
 }
 
+func (r *mutationResolver) MigrateThumbnails(ctx context.Context) (string, error) {
+	jobID := manager.GetInstance().MigrateThumbnails(ctx, false)
+	return strconv.Itoa(jobID), nil
+}
+
 func (r *mutationResolver) BackupDatabase(ctx context.Context, input BackupDatabaseInput) (*string, error) {
 	// if download is true, then backup to temporary file and return a link
 	download := input.Download != nil && *input.Download

@@ -42,6 +42,10 @@ mutation MigrateHashNaming {
   migrateHashNaming
 }
 
+mutation MigrateThumbnails {
+  migrateThumbnails
+}
+
 mutation BackupDatabase($input: BackupDatabaseInput!) {
   backupDatabase(input: $input)
 }

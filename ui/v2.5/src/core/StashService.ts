@@ -2899,6 +2899,11 @@ export const mutateMigrateHashNaming = () =>
     mutation: GQL.MigrateHashNamingDocument,
   });
 
+export const mutateMigrateThumbnails = () =>
+  client.mutate<GQL.MigrateThumbnailsMutation>({
+    mutation: GQL.MigrateThumbnailsDocument,
+  });
+
 export const mutateMigrateSceneScreenshots = (
   input: GQL.MigrateSceneScreenshotsInput
 ) =>

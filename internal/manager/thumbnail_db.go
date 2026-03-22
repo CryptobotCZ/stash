@@ -429,7 +429,7 @@ func createThumbnailTable(db *sql.DB) error {
 			%s TEXT PRIMARY KEY,
 			data BLOB NOT NULL
 		);
-	`, thumbnailTable, thumbnailChecksumColumn, thumbnailTable, thumbnailChecksumColumn)
+	`, thumbnailTable, thumbnailChecksumColumn)
 
 	_, err := db.Exec(query)
 	return err

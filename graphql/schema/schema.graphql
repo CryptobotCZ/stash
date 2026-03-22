@@ -482,6 +482,8 @@ type Mutation {
 
   "Migrate generated files for the current hash naming"
   migrateHashNaming: ID!
+  "Migrate image thumbnails to DATABASE_PREFIXED storage"
+  migrateThumbnails: ID!
   "Migrates legacy scene screenshot files into the blob storage"
   migrateSceneScreenshots(input: MigrateSceneScreenshotsInput!): ID!
   "Migrates blobs from the old storage system to the current one"

@@ -79,6 +79,7 @@
     "merge_into": "Merge into",
     "migrate_blobs": "Migrate Blobs",
     "migrate_scene_screenshots": "Migrate Scene Screenshots",
+    "migrate_thumbnails": "Migrate Thumbnails",
     "next_action": "Next",
     "not_running": "not running",
     "open_in_external_player": "Open in external player",
@@ -568,6 +569,9 @@
         "delete_files": "Delete screenshot files",
         "description": "Migrate scene screenshots into the new blob storage system. This migration should be run after migrating an existing system to 0.20. Can optionally delete the old screenshots after migration.",
         "overwrite_existing": "Overwrite existing blobs with screenshot data"
+      },
+      "migrate_thumbnails": {
+        "description": "Migrate image thumbnails from filesystem storage to DATABASE_PREFIXED storage. This migration should be run after switching to DATABASE_PREFIXED thumbnail storage mode."
       },
       "migrations": "Migrations",
       "only_dry_run": "Only perform a dry run. Don't remove anything",

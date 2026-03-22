@@ -3,6 +3,7 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { Button, Col, Form, Row } from "react-bootstrap";
 import {
   mutateMigrateHashNaming,
+  mutateMigrateThumbnails,
   mutateMetadataExport,
   mutateBackupDatabase,
   mutateMetadataImport,
@@ -285,6 +286,24 @@ export const DataManagementTasks: React.FC<IDataManagementTasks> = ({
           {
             operation_name: intl.formatMessage({
               id: "actions.hash_migration",
+            }),
+          }
+        )
+      );
+    } catch (err) {
+      Toast.error(err);
+    }
+  }
+
+  async function onMigrateThumbnails() {
+    try {
+      await mutateMigrateThumbnails();
+      Toast.success(
+        intl.formatMessage(
+          { id: "config.tasks.added_job_to_queue" },
+          {
+            operation_name: intl.formatMessage({
+              id: "actions.thumbnail_migration",
             }),
           }
         )
@@ -643,6 +662,20 @@ export const DataManagementTasks: React.FC<IDataManagementTasks> = ({
             onClick={() => onMigrateHashNaming()}
           >
             <FormattedMessage id="actions.rename_gen_files" />
+          </Button>
+        </Setting>
+
+        <Setting
+          advanced
+          headingID="actions.migrate_thumbnails"
+          subHeadingID="config.tasks.migrate_thumbnails.description"
+        >
+          <Button
+            id="migrateThumbnails"
+            variant="danger"
+            onClick={() => onMigrateThumbnails()}
+          >
+            <FormattedMessage id="actions.migrate_thumbnails" />
           </Button>
         </Setting>
 
