@@ -78,6 +78,16 @@ type HybridThumbnailDB struct {
 	fastMode bool
 }
 
+// SetFastMode enables performance optimizations for bulk writes
+func (p *HybridThumbnailDB) SetFastMode(enabled bool) {
+	p.fastMode = enabled
+}
+
+// IsFastMode returns whether fast mode is enabled
+func (p *HybridThumbnailDB) IsFastMode() bool {
+	return p.fastMode
+}
+
 // NewThumbnailDB creates a new single thumbnail database
 func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
 	return NewThumbnailDBWithOptions(dbPath, ThumbnailDBOptions{})
@@ -553,7 +563,8 @@ func (p *HybridThumbnailDB) getDB(index int) (*ThumbnailDB, error) {
 
 	dbPath := p.getDBPath(index)
 	opts := ThumbnailDBOptions{
-		FastMode: p.fastMode,
+		FastMode:  p.fastMode,
+		SkipIndex: p.fastMode,
 	}
 	newDB, err := NewThumbnailDBWithOptions(dbPath, opts)
 	if err != nil {
