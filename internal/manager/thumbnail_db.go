@@ -55,6 +55,27 @@ type PerGalleryThumbnailDB struct {
 	basePath string
 	dbs      map[int]*ThumbnailDB
 	mu       sync.RWMutex
+	fastMode bool
+}
+
+// SetFastMode enables performance optimizations for bulk writes
+func (p *PerGalleryThumbnailDB) SetFastMode(enabled bool) {
+	p.fastMode = enabled
+}
+
+// IsFastMode returns whether fast mode is enabled
+func (p *PerGalleryThumbnailDB) IsFastMode() bool {
+	return p.fastMode
+}
+
+// HybridThumbnailDB manages thumbnail databases using gallery ID modulo 256
+// - Images with gallery: gallery_id % 256 → database file
+// - Images without gallery: 255 → default database file
+type HybridThumbnailDB struct {
+	basePath string
+	dbs      map[int]*ThumbnailDB
+	mu       sync.RWMutex
+	fastMode bool
 }
 
 // NewThumbnailDB creates a new single thumbnail database
@@ -480,6 +501,193 @@ func (p *PerGalleryThumbnailDB) Close() error {
 	for galleryID, db := range p.dbs {
 		if err := db.Close(); err != nil {
 			errors = append(errors, fmt.Sprintf("error closing db for gallery %d: %w", galleryID, err))
+		}
+	}
+	p.dbs = make(map[int]*ThumbnailDB)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors closing databases: %s", strings.Join(errors, ", "))
+	}
+	return nil
+}
+
+// HybridThumbnailDB methods
+
+// NewHybridThumbnailDB creates a manager for hybrid thumbnail databases
+func NewHybridThumbnailDB(basePath string) (*HybridThumbnailDB, error) {
+	hybridPath := filepath.Join(basePath, "hybrid")
+	if err := fsutil.EnsureDirAll(hybridPath); err != nil {
+		return nil, fmt.Errorf("creating hybrid thumbnail db directory: %w", err)
+	}
+
+	logger.Infof("Initialized hybrid thumbnail database at %s", hybridPath)
+
+	return &HybridThumbnailDB{
+		basePath: hybridPath,
+		dbs:      make(map[int]*ThumbnailDB),
+	}, nil
+}
+
+// getDBPath returns the database path for a given index (gallery_id % 256 or 255 for no gallery)
+func (p *HybridThumbnailDB) getDBPath(index int) string {
+	return filepath.Join(p.basePath, fmt.Sprintf("%02d.db", index))
+}
+
+// getDB returns or creates the database for the given index
+func (p *HybridThumbnailDB) getDB(index int) (*ThumbnailDB, error) {
+	p.mu.RLock()
+	db, exists := p.dbs[index]
+	p.mu.RUnlock()
+
+	if exists {
+		return db, nil
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if db, exists := p.dbs[index]; exists {
+		return db, nil
+	}
+
+	dbPath := p.getDBPath(index)
+	opts := ThumbnailDBOptions{
+		FastMode: p.fastMode,
+	}
+	newDB, err := NewThumbnailDBWithOptions(dbPath, opts)
+	if err != nil {
+		return nil, fmt.Errorf("creating hybrid thumbnail db for index %d: %w", index, err)
+	}
+
+	p.dbs[index] = newDB
+	return newDB, nil
+}
+
+// GetDBIndex returns the database index for an image based on its gallery
+// Returns gallery_id % 256 if image has gallery, otherwise 255 (default DB)
+func (p *HybridThumbnailDB) GetDBIndex(galleryID *int) int {
+	if galleryID == nil || *galleryID == 0 {
+		return 255 // Default DB for images without gallery
+	}
+	return *galleryID % 256
+}
+
+// Read reads a thumbnail from the hybrid databases
+func (p *HybridThumbnailDB) Read(index int, checksum string) ([]byte, error) {
+	db, err := p.getDB(index)
+	if err != nil {
+		return nil, err
+	}
+	return db.Read(checksum)
+}
+
+// Write writes a thumbnail to the hybrid databases
+func (p *HybridThumbnailDB) Write(index int, checksum string, data []byte) error {
+	db, err := p.getDB(index)
+	if err != nil {
+		return err
+	}
+	return db.Write(checksum, data)
+}
+
+// Delete deletes a thumbnail from the hybrid databases
+func (p *HybridThumbnailDB) Delete(index int, checksum string) error {
+	db, err := p.getDB(index)
+	if err != nil {
+		return err
+	}
+	return db.Delete(checksum)
+}
+
+// Exists checks if a thumbnail exists in the hybrid databases
+func (p *HybridThumbnailDB) Exists(index int, checksum string) (bool, error) {
+	db, err := p.getDB(index)
+	if err != nil {
+		return false, err
+	}
+	return db.Exists(checksum)
+}
+
+// GetAllChecksums returns checksums from all opened databases
+func (p *HybridThumbnailDB) GetAllChecksums(ctx context.Context) ([]string, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var allChecksums []string
+
+	for index, db := range p.dbs {
+		checksums, err := db.GetAllChecksums(ctx)
+		if err != nil {
+			logger.Warnf("Error getting checksums from index %d: %v", index, err)
+			continue
+		}
+		allChecksums = append(allChecksums, checksums...)
+	}
+
+	return allChecksums, nil
+}
+
+// GetAllChecksumsAllDBs returns checksums from all database files (including unopened ones)
+func (p *HybridThumbnailDB) GetAllChecksumsAllDBs(ctx context.Context) ([]string, error) {
+	var allChecksums []string
+
+	entries, err := os.ReadDir(p.basePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading hybrid directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".db") {
+			continue
+		}
+
+		name := strings.TrimSuffix(entry.Name(), ".db")
+		if _, err := strconv.Atoi(name); err != nil {
+			continue
+		}
+
+		dbPath := filepath.Join(p.basePath, entry.Name())
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			logger.Warnf("Error opening database %s: %v", dbPath, err)
+			continue
+		}
+
+		query := fmt.Sprintf("SELECT %s FROM %s", thumbnailChecksumColumn, thumbnailTable)
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			db.Close()
+			logger.Warnf("Error querying database %s: %v", dbPath, err)
+			continue
+		}
+
+		for rows.Next() {
+			var checksum string
+			if err := rows.Scan(&checksum); err != nil {
+				rows.Close()
+				db.Close()
+				logger.Warnf("Error scanning checksum: %v", err)
+				continue
+			}
+			allChecksums = append(allChecksums, checksum)
+		}
+		rows.Close()
+		db.Close()
+	}
+
+	return allChecksums, nil
+}
+
+// Close closes all hybrid databases
+func (p *HybridThumbnailDB) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var errors []string
+	for index, db := range p.dbs {
+		if err := db.Close(); err != nil {
+			errors = append(errors, fmt.Sprintf("error closing db for index %d: %w", index, err))
 		}
 	}
 	p.dbs = make(map[int]*ThumbnailDB)

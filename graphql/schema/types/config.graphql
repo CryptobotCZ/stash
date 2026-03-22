@@ -75,6 +75,9 @@ enum ImageThumbnailsStorageType {
   # thumbnails are stored in separate database files per gallery
   "Database Per Gallery"
   DATABASE_PER_GALLERY
+  # thumbnails are stored in database files based on gallery ID modulo 256 (default DB for images without gallery)
+  "Database (Hybrid)"
+  DATABASE_HYBRID
 }
 
 input ConfigGeneralInput {

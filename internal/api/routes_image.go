@@ -77,6 +77,11 @@ func (rs imageRoutes) serveThumbnail(w http.ResponseWriter, r *http.Request, img
 		return
 	}
 
+	if storageType == config.ImageThumbnailsStorageHybrid {
+		rs.serveThumbnailFromHybridDB(w, r, img, modTime)
+		return
+	}
+
 	// FILESYSTEM storage mode (original behavior)
 	filepath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
 
@@ -178,6 +183,41 @@ func (rs imageRoutes) serveThumbnailFromPerGalleryDB(w http.ResponseWriter, r *h
 
 	// Not found in database, generate and save
 	rs.generateAndServeThumbnailToPerGalleryDB(w, r, img, galleryID)
+}
+
+func (rs imageRoutes) serveThumbnailFromHybridDB(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
+	mgr := manager.GetInstance()
+	hybridDB := mgr.HybridThumbnailDB
+	if hybridDB == nil {
+		rs.serveThumbnailFromFilesystem(w, r, img, modTime)
+		return
+	}
+
+	// Find the gallery this image belongs to
+	var galleryID int
+	if rs.galleryFinder != nil {
+		galleries, err := rs.galleryFinder.FindByImageID(r.Context(), img.ID)
+		if err == nil && len(galleries) > 0 {
+			galleryID = galleries[0].ID
+		}
+	}
+
+	// Get the DB index (gallery_id % 256, or 255 for no gallery)
+	index := hybridDB.GetDBIndex(&galleryID)
+
+	// Try to read from hybrid database
+	data, err := hybridDB.Read(index, img.Checksum)
+	if err == nil {
+		// Found in database, serve it
+		if modTime != nil {
+			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
+		}
+		utils.ServeStaticContent(w, r, data)
+		return
+	}
+
+	// Not found in database, generate and save
+	rs.generateAndServeThumbnailToHybridDB(w, r, img, index)
 }
 
 func (rs imageRoutes) serveThumbnailFromFilesystem(w http.ResponseWriter, r *http.Request, img *models.Image, modTime *time.Time) {
@@ -331,6 +371,48 @@ func (rs imageRoutes) generateAndServeThumbnailToPerGalleryDB(w http.ResponseWri
 	utils.ServeStaticContent(w, r, data)
 }
 
+func (rs imageRoutes) generateAndServeThumbnailToHybridDB(w http.ResponseWriter, r *http.Request, img *models.Image, index int) {
+	mgr := manager.GetInstance()
+	hybridDB := mgr.HybridThumbnailDB
+	if hybridDB == nil {
+		http.Error(w, "hybrid thumbnail database not available", http.StatusInternalServerError)
+		return
+	}
+
+	f := img.Files.Primary()
+	if f == nil {
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	wg := &mgr.ImageThumbnailGenerateWaitGroup
+	wg.Add()
+	defer wg.Done()
+
+	clipPreviewOptions := image.ClipPreviewOptions{
+		InputArgs:  mgr.Config.GetTranscodeInputArgs(),
+		OutputArgs: mgr.Config.GetTranscodeOutputArgs(),
+		Preset:     mgr.Config.GetPreviewPreset().String(),
+	}
+
+	encoder := image.NewThumbnailEncoder(mgr.FFMpeg, mgr.FFProbe, clipPreviewOptions)
+	data, err := encoder.GetThumbnail(f, models.DefaultGthumbWidth)
+	if err != nil {
+		if !errors.Is(err, image.ErrNotSupportedForThumbnail) && !errors.Is(err, fs.ErrNotExist) {
+			logger.Errorf("error generating thumbnail for %s: %v", f.Base().Path, err)
+		}
+		const useDefault = true
+		rs.serveImage(w, r, img, useDefault)
+		return
+	}
+
+	if err := hybridDB.Write(index, img.Checksum, data); err != nil {
+		logger.Errorf("error writing thumbnail to hybrid database for image %s: %v", img.Path, err)
+	}
+
+	utils.ServeStaticContent(w, r, data)
+}
 
 func (rs imageRoutes) generateAndServeThumbnail(w http.ResponseWriter, r *http.Request, img *models.Image, filepath string, modTime *time.Time) {
 	mgr := manager.GetInstance()

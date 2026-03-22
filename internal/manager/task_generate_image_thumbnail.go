@@ -104,6 +104,16 @@ func (t *GenerateImageThumbnailTask) Start(ctx context.Context) {
 				}
 			}
 		}
+	} else if storageType == config.ImageThumbnailsStorageHybrid {
+		hybridDB := mgr.HybridThumbnailDB
+		if hybridDB != nil {
+			// Find the gallery this image belongs to
+			galleryID := t.findGalleryID(ctx)
+			index := hybridDB.GetDBIndex(&galleryID)
+			if err := hybridDB.Write(index, t.Image.Checksum, data); err != nil {
+				logger.Errorf("[generator] writing thumbnail to hybrid database for image %s: %s", path, err.Error())
+			}
+		}
 	} else {
 		// FILESYSTEM mode
 		thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)

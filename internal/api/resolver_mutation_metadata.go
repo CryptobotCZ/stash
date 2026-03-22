@@ -111,6 +111,8 @@ func (r *mutationResolver) MetadataCleanGenerated(ctx context.Context, input tas
 		BlobCleaner:              mgr.Repository.Blob,
 		ThumbnailDB:              mgr.ThumbnailDB,
 		PrefixedThumbnailDB:      mgr.PrefixedThumbnailDB,
+		PerGalleryThumbnailDB:    mgr.PerGalleryThumbnailDB,
+		HybridThumbnailDB:        mgr.HybridThumbnailDB,
 	}
 	jobID := mgr.JobManager.Add(ctx, "Cleaning generated files...", t)
 

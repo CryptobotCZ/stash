@@ -64,6 +64,7 @@ type Manager struct {
 	ThumbnailDB           *ThumbnailDB
 	PrefixedThumbnailDB   *PrefixedThumbnailDB
 	PerGalleryThumbnailDB *PerGalleryThumbnailDB
+	HybridThumbnailDB     *HybridThumbnailDB
 	Repository            models.Repository
 
 	SceneService   SceneService

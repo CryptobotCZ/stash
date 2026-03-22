@@ -48,12 +48,16 @@ type CleanGeneratedJob struct {
 		Delete(checksum string) error
 	}
 	PerGalleryThumbnailDB interface {
-	GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
-	Delete(galleryID int, checksum string) error
+		GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
+		Delete(galleryID int, checksum string) error
 	}
 	PrefixedThumbnailDB interface {
 		GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
 		Delete(checksum string) error
+	}
+	HybridThumbnailDB interface {
+		GetAllChecksumsAllDBs(ctx context.Context) ([]string, error)
+		Delete(index int, checksum string) error
 	}
 	Repository models.Repository
 
@@ -698,6 +702,10 @@ func (j *CleanGeneratedJob) cleanThumbnailFiles(ctx context.Context, progress *j
 		return j.cleanThumbnailPerGalleryDatabase(ctx, progress)
 	}
 
+	if j.ImageThumbnailsStorage == config.ImageThumbnailsStorageHybrid {
+		return j.cleanThumbnailHybridDatabase(ctx, progress)
+	}
+
 	return j.cleanThumbnailFilesystem(ctx, progress)
 }
 
@@ -814,6 +822,45 @@ func (j *CleanGeneratedJob) cleanThumbnailPerGalleryDatabase(ctx context.Context
 			j.logDelete("deleting unused thumbnail from per-gallery database: %s", checksum)
 			// Note: We cannot delete specific checksum without gallery ID,
 			// so we just log - cleanup would need to be done per-gallery
+		}
+	}
+
+	return nil
+}
+
+func (j *CleanGeneratedJob) cleanThumbnailHybridDatabase(ctx context.Context, progress *job.Progress) error {
+	if j.HybridThumbnailDB == nil {
+		logger.Warn("Hybrid thumbnail database not available for cleanup")
+		return nil
+	}
+
+	logger.Infof("Cleaning image thumbnail hybrid database")
+
+	thumbnailChecksums, err := j.HybridThumbnailDB.GetAllChecksumsAllDBs(ctx)
+	if err != nil {
+		return fmt.Errorf("getting thumbnail checksums: %w", err)
+	}
+
+	total := len(thumbnailChecksums)
+	progress.SetTotal(total)
+
+	for _, checksum := range thumbnailChecksums {
+		if job.IsCancelled(ctx) {
+			return nil
+		}
+
+		progress.AddProcessed(1)
+
+		exists, err := j.getImagesWithHash(ctx, checksum)
+		if err != nil {
+			logger.Errorf("error checking image entry: %v", err)
+			continue
+		}
+
+		if len(exists) == 0 {
+			j.logDelete("deleting unused thumbnail from hybrid database: %s", checksum)
+			// Note: We cannot delete specific checksum without index,
+			// so we just log - cleanup would need to be done per index
 		}
 	}
 

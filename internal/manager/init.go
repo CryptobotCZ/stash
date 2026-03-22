@@ -145,6 +145,13 @@ func Initialize(cfg *config.Config, l *log.Logger) (*Manager, error) {
 				return nil, fmt.Errorf("initializing per-gallery thumbnail database: %w", err)
 			}
 			mgr.PerGalleryThumbnailDB = perGalleryDB
+		} else if storageType == config.ImageThumbnailsStorageHybrid {
+			// Hybrid databases mode (gallery ID % 256, or 255 for no gallery)
+			hybridDB, err := NewHybridThumbnailDB(mgr.Paths.Generated.Thumbnails)
+			if err != nil {
+				return nil, fmt.Errorf("initializing hybrid thumbnail database: %w", err)
+			}
+			mgr.HybridThumbnailDB = hybridDB
 		}
 		// FILESYSTEM mode doesn't need any initialization
 
