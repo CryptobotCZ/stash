@@ -18,6 +18,14 @@ import (
 const thumbnailTable = "thumbnails"
 const thumbnailChecksumColumn = "checksum"
 
+// ThumbnailDBOptions contains options for creating a thumbnail database
+type ThumbnailDBOptions struct {
+	// FastMode enables performance optimizations for bulk writes (e.g., migration)
+	FastMode bool
+	// SkipIndex creates table without checksum index (for faster initial migration)
+	SkipIndex bool
+}
+
 // ThumbnailDB represents a single thumbnail database
 type ThumbnailDB struct {
 	db     *sql.DB
@@ -29,6 +37,17 @@ type PrefixedThumbnailDB struct {
 	basePath string
 	dbs      map[string]*ThumbnailDB
 	mu       sync.RWMutex
+	fastMode bool
+}
+
+// SetFastMode enables performance optimizations for bulk writes
+func (p *PrefixedThumbnailDB) SetFastMode(enabled bool) {
+	p.fastMode = enabled
+}
+
+// IsFastMode returns whether fast mode is enabled
+func (p *PrefixedThumbnailDB) IsFastMode() bool {
+	return p.fastMode
 }
 
 // PerGalleryThumbnailDB manages thumbnail databases per gallery
@@ -40,6 +59,11 @@ type PerGalleryThumbnailDB struct {
 
 // NewThumbnailDB creates a new single thumbnail database
 func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
+	return NewThumbnailDBWithOptions(dbPath, ThumbnailDBOptions{})
+}
+
+// NewThumbnailDBWithOptions creates a new single thumbnail database with custom options
+func NewThumbnailDBWithOptions(dbPath string, opts ThumbnailDBOptions) (*ThumbnailDB, error) {
 	if err := fsutil.EnsureDirAll(filepath.Dir(dbPath)); err != nil {
 		return nil, fmt.Errorf("creating thumbnail db directory: %w", err)
 	}
@@ -49,7 +73,15 @@ func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
 		return nil, fmt.Errorf("opening thumbnail db: %w", err)
 	}
 
-	if err := createThumbnailTable(db); err != nil {
+	// Apply speed pragmas if in fast mode
+	if opts.FastMode {
+		if err := applySpeedPragmas(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("applying speed pragmas: %w", err)
+		}
+	}
+
+	if err := createThumbnailTable(db, opts.SkipIndex); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating thumbnail table: %w", err)
 	}
@@ -60,6 +92,37 @@ func NewThumbnailDB(dbPath string) (*ThumbnailDB, error) {
 		db:     db,
 		dbPath: dbPath,
 	}, nil
+}
+
+// applySpeedPragmas sets SQLite to fast mode for bulk writes
+func applySpeedPragmas(db *sql.DB) error {
+	pragmas := []string{
+		"PRAGMA synchronous = OFF",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA cache_size = -64000",
+		"PRAGMA temp_store = MEMORY",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			return fmt.Errorf("failed to apply pragma %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// RestoreDefaultPragmas restores SQLite to default settings after fast mode
+func RestoreDefaultPragmas(db *sql.DB) {
+	defaultPragmas := []string{
+		"PRAGMA synchronous = NORMAL",
+		"PRAGMA journal_mode = DELETE",
+		"PRAGMA cache_size = -2000",
+		"PRAGMA temp_store = DEFAULT",
+	}
+	for _, p := range defaultPragmas {
+		if _, err := db.Exec(p); err != nil {
+			logger.Warnf("failed to restore pragma %s: %v", p, err)
+		}
+	}
 }
 
 // NewPrefixedThumbnailDB creates a manager for prefixed thumbnail databases
@@ -126,7 +189,11 @@ func (p *PrefixedThumbnailDB) getDB(checksum string) (*ThumbnailDB, error) {
 	}
 
 	dbPath := p.getDBPath(prefix)
-	newDB, err := NewThumbnailDB(dbPath)
+	opts := ThumbnailDBOptions{
+		FastMode:  p.fastMode,
+		SkipIndex: p.fastMode, // Skip index during fast mode migration
+	}
+	newDB, err := NewThumbnailDBWithOptions(dbPath, opts)
 	if err != nil {
 		return nil, fmt.Errorf("creating prefixed thumbnail db for %s: %w", prefix, err)
 	}
@@ -423,7 +490,7 @@ func (p *PerGalleryThumbnailDB) Close() error {
 	return nil
 }
 
-func createThumbnailTable(db *sql.DB) error {
+func createThumbnailTable(db *sql.DB, skipIndex bool) error {
 	query := fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			%s TEXT PRIMARY KEY,
@@ -432,6 +499,18 @@ func createThumbnailTable(db *sql.DB) error {
 	`, thumbnailTable, thumbnailChecksumColumn)
 
 	_, err := db.Exec(query)
+	if err != nil {
+		return err
+	}
+
+	// Add index after table creation if not skipping
+	if !skipIndex {
+		indexQuery := fmt.Sprintf(`
+			CREATE INDEX IF NOT EXISTS idx_thumbnails_checksum ON %s(%s);
+		`, thumbnailTable, thumbnailChecksumColumn)
+		_, err = db.Exec(indexQuery)
+	}
+
 	return err
 }
 

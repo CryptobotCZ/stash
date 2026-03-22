@@ -11,6 +11,8 @@ import (
 	"github.com/stashapp/stash/pkg/models"
 )
 
+const migrationBatchSize = 50 // Increased from 10 for better performance
+
 type MigrateThumbnailsTask struct {
 	Overwrite bool
 }
@@ -63,7 +65,7 @@ func (t *MigrateThumbnailsTask) migrateThumbnail(image *models.Image) {
 }
 
 func (s *Manager) MigrateThumbnails(ctx context.Context, overwrite bool) int {
-	task := &MigrateThumbnailsTask{
+	migrationTask := &MigrateThumbnailsTask{
 		Overwrite: overwrite,
 	}
 
@@ -74,46 +76,61 @@ func (s *Manager) MigrateThumbnails(ctx context.Context, overwrite bool) int {
 			return fmt.Errorf("PrefixedThumbnailDB not initialized")
 		}
 
+		// Enable fast mode for better migration performance
+		logger.Infof("Enabling fast mode for migration...")
+		prefixedDB.SetFastMode(true)
+
 		var images []*models.Image
 		if err := mgr.Repository.WithTxn(ctx, func(ctx context.Context) error {
 			var err error
 			images, err = mgr.Repository.Image.All(ctx)
 			return err
 		}); err != nil {
+			prefixedDB.SetFastMode(false)
 			return fmt.Errorf("error fetching images: %w", err)
 		}
 
 		total := len(images)
 		progress.SetTotal(total)
-		logger.Infof("Migrating %d image thumbnails to DATABASE_PREFIXED storage", total)
+		logger.Infof("Migrating %d image thumbnails to DATABASE_PREFIXED storage (batch size: %d)", total, migrationBatchSize)
 
 		var wg sync.WaitGroup
+		migrated := 0
+		skipped := 0
 
 		for i, image := range images {
 			progress.Increment()
 
 			if job.IsCancelled(ctx) {
 				logger.Info("Stopping migration due to user request")
-				return nil
+				break
 			}
 
 			if image == nil || image.Checksum == "" {
+				skipped++
 				continue
 			}
 
 			wg.Add(1)
 			go func(img *models.Image) {
 				defer wg.Done()
-				task.migrateThumbnail(img)
+				migrationTask.migrateThumbnail(img)
 			}(image)
+			migrated++
 
-			if (i+1)%10 == 0 {
+			if (i+1)%migrationBatchSize == 0 {
 				wg.Wait()
+				logger.Infof("Migration progress: %d/%d (skipped: %d)", migrated, total, skipped)
 			}
 		}
 
 		wg.Wait()
-		logger.Info("Finished migrating thumbnails")
+
+		// Disable fast mode and restore default pragmas
+		logger.Infof("Restoring default settings...")
+		prefixedDB.SetFastMode(false)
+
+		logger.Infof("Finished migrating thumbnails: %d migrated, %d skipped", migrated, skipped)
 		return nil
 	}))
 }

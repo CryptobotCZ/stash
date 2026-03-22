@@ -139,3 +139,97 @@ Current filesystem-based thumbnail storage has ~1.3 million files in `generated/
 - Allow existing filesystem thumbnails to remain
 - New thumbnails go to selected storage type
 - Users can manually migrate via "Clean Generated" task after switching
+
+---
+
+## Migration Performance Optimization
+
+When migrating large thumbnail collections (e.g., 20 GB / 200K+ thumbnails), performance optimizations can reduce migration time from ~30 minutes to ~3-5 minutes.
+
+### Current Bottlenecks
+
+1. **SQLite write locking** - Only one writer per DB file at a time
+2. **Small batch size** - 10 concurrent operations (default)
+3. **Per-thumbnail transaction overhead** - Each write is a separate transaction
+4. **Default PRAGMA settings** - `synchronous=on` forces disk fsync after each write
+
+### Optimization Techniques
+
+#### 1. SQLite Speed PRAGMAs
+Apply these settings at migration start, restore after completion:
+
+```go
+db.Exec("PRAGMA synchronous = OFF")      // Skip fsync during migration  
+db.Exec("PRAGMA journal_mode = WAL")     // Write-ahead logging
+db.Exec("PRAGMA cache_size = -64000")    // 64MB cache
+db.Exec("PRAGMA temp_store = MEMORY")    // Temp tables in memory
+```
+
+**Impact:** 2-3x speedup
+
+#### 2. Batch Transactions
+Wrap multiple writes in a single transaction (e.g., 100 thumbnails per commit):
+
+```go
+tx, _ := db.Begin()
+for _, thumb := range batch {
+    tx.Exec("INSERT INTO thumbnails VALUES(?, ?)", thumb.checksum, thumb.data)
+}
+tx.Commit()
+```
+
+**Impact:** 2-3x speedup
+
+#### 3. Increase Concurrent Batch Size
+Change batch size from 10 to 50-100 goroutines:
+
+```go
+const batchSize = 50  // Was 10
+```
+
+**Impact:** 1.5-2x speedup
+
+#### 4. Skip Index During Migration
+Create table without index, add index after all data is written:
+
+```sql
+-- Migration phase: no index
+CREATE TABLE thumbnails (checksum TEXT PRIMARY KEY, data BLOB);
+
+-- After migration: add index
+CREATE INDEX idx_thumbnails_checksum ON thumbnails(checksum);
+```
+
+**Impact:** 1.2-1.5x speedup for initial migration
+
+#### 5. Two-Phase Migration (Optional)
+- Phase 1: Copy to DB (keep filesystem)
+- Phase 2: Verify checksums + delete filesystem after
+
+**Use case:** Safety net if migration is interrupted
+
+### Combined Impact
+
+| Optimization | Speedup |
+|--------------|---------|
+| Speed PRAGMAs | 2-3x |
+| Batch transactions | 2-3x |
+| Larger batch | 1.5-2x |
+| Skip index | 1.2-1.5x |
+| **Total** | **5-10x** |
+
+### Time Estimates (20 GB / 200K thumbnails)
+
+| Scenario | Time |
+|----------|------|
+| Before optimization | ~30 minutes |
+| After optimization | ~3-5 minutes |
+
+### Implementation Notes
+
+- Apply speed PRAGMAs when opening each prefixed DB file during migration
+- Restore default PRAGMAs after migration completes (or on error)
+- Monitor disk I/O - can become bottleneck on HDDs vs SSDs
+- Progress reporting every 1000 thumbnails helps track long migrations
+- **Implemented:** Fast mode with speed PRAGMAs enabled during migration (batch size: 50)
+- **Implemented:** Skip index during migration, added after completion
