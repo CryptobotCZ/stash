@@ -2904,6 +2904,11 @@ export const mutateMigrateThumbnails = () =>
     mutation: GQL.MigrateThumbnailsDocument,
   });
 
+export const mutateMigrateThumbnailsToHybrid = () =>
+  client.mutate<GQL.MigrateThumbnailsToHybridMutation>({
+    mutation: GQL.MigrateThumbnailsToHybridDocument,
+  });
+
 export const mutateMigrateSceneScreenshots = (
   input: GQL.MigrateSceneScreenshotsInput
 ) =>

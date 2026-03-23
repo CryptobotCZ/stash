@@ -4,6 +4,7 @@ import { Button, Col, Form, Row } from "react-bootstrap";
 import {
   mutateMigrateHashNaming,
   mutateMigrateThumbnails,
+  mutateMigrateThumbnailsToHybrid,
   mutateMetadataExport,
   mutateBackupDatabase,
   mutateMetadataImport,
@@ -304,6 +305,24 @@ export const DataManagementTasks: React.FC<IDataManagementTasks> = ({
           {
             operation_name: intl.formatMessage({
               id: "actions.thumbnail_migration",
+            }),
+          }
+        )
+      );
+    } catch (err) {
+      Toast.error(err);
+    }
+  }
+
+  async function onMigrateThumbnailsToHybrid() {
+    try {
+      await mutateMigrateThumbnailsToHybrid();
+      Toast.success(
+        intl.formatMessage(
+          { id: "config.tasks.added_job_to_queue" },
+          {
+            operation_name: intl.formatMessage({
+              id: "actions.thumbnail_migration_hybrid",
             }),
           }
         )
@@ -676,6 +695,20 @@ export const DataManagementTasks: React.FC<IDataManagementTasks> = ({
             onClick={() => onMigrateThumbnails()}
           >
             <FormattedMessage id="actions.migrate_thumbnails" />
+          </Button>
+        </Setting>
+
+        <Setting
+          advanced
+          headingID="actions.migrate_thumbnails_hybrid"
+          subHeadingID="config.tasks.migrate_thumbnails_hybrid.description"
+        >
+          <Button
+            id="migrateThumbnailsToHybrid"
+            variant="danger"
+            onClick={() => onMigrateThumbnailsToHybrid()}
+          >
+            <FormattedMessage id="actions.migrate_thumbnails_hybrid" />
           </Button>
         </Setting>
 

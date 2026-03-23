@@ -80,6 +80,9 @@
     "migrate_blobs": "Migrate Blobs",
     "migrate_scene_screenshots": "Migrate Scene Screenshots",
     "migrate_thumbnails": "Migrate Thumbnails",
+    "migrate_thumbnails_hybrid": "Migrate Thumbnails (Hybrid)",
+    "thumbnail_migration": "thumbnail migration",
+    "thumbnail_migration_hybrid": "thumbnail migration (hybrid)",
     "next_action": "Next",
     "not_running": "not running",
     "open_in_external_player": "Open in external player",
@@ -572,6 +575,9 @@
       },
       "migrate_thumbnails": {
         "description": "Migrate image thumbnails from filesystem storage to DATABASE_PREFIXED storage. This migration should be run after switching to DATABASE_PREFIXED thumbnail storage mode."
+      },
+      "migrate_thumbnails_hybrid": {
+        "description": "Migrate image thumbnails from filesystem storage to DATABASE_HYBRID storage. This migration should be run after switching to DATABASE_HYBRID thumbnail storage mode."
       },
       "migrations": "Migrations",
       "only_dry_run": "Only perform a dry run. Don't remove anything",
