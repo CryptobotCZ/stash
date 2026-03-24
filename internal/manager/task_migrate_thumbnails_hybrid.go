@@ -89,7 +89,18 @@ func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool)
 		if err := mgr.Repository.WithTxn(ctx, func(ctx context.Context) error {
 			var err error
 			images, err = mgr.Repository.Image.All(ctx)
-			return err
+			if err != nil {
+				return err
+			}
+
+			logger.Infof("Loading gallery relationships for %d images...", len(images))
+			for _, img := range images {
+				if err := img.LoadGalleryIDs(ctx, mgr.Repository.Image); err != nil {
+					logger.Warnf("Error loading gallery IDs for image %s: %v", img.Checksum, err)
+				}
+			}
+
+			return nil
 		}); err != nil {
 			hybridDB.SetFastMode(false)
 			return fmt.Errorf("error fetching images: %w", err)
