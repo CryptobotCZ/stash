@@ -11,7 +11,11 @@ import (
 	"github.com/stashapp/stash/pkg/models"
 )
 
-const migrationBatchSize = 100 // Increased from 50 for better parallelism
+const (
+	migrationBatchSize      = 100
+	migrationNumWorkers    = 16 // Parallel workers for file I/O and DB writes
+	migrationFileBatchSize = 200 // Read files in batches for better I/O
+)
 
 type MigrateThumbnailsToHybridTask struct {
 	Overwrite bool
@@ -21,55 +25,10 @@ func (t *MigrateThumbnailsToHybridTask) GetDescription() string {
 	return "Migrating image thumbnails to DATABASE_HYBRID storage"
 }
 
-func (t *MigrateThumbnailsToHybridTask) migrateThumbnail(image *models.Image) {
-	checksum := image.Checksum
-	if checksum == "" {
-		return
-	}
-
-	mgr := GetInstance()
-	hybridDB := mgr.HybridThumbnailDB
-	if hybridDB == nil {
-		return
-	}
-
-	var galleryID *int
-	if image.GalleryIDs.Loaded() && len(image.GalleryIDs.List()) > 0 {
-		id := image.GalleryIDs.List()[0]
-		galleryID = &id
-	}
-
-	index := hybridDB.GetDBIndex(galleryID)
-
-	if !t.Overwrite {
-		exists, err := hybridDB.Exists(index, checksum)
-		if err == nil && exists {
-			logger.Debugf("Thumbnail already exists in hybrid DB for checksum %s", checksum)
-			return
-		}
-	}
-
-	thumbPath := mgr.Paths.Generated.GetThumbnailPath(checksum, models.DefaultGthumbWidth)
-	data, err := os.ReadFile(thumbPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			logger.Debugf("Filesystem thumbnail not found for checksum %s", checksum)
-		} else {
-			logger.Errorf("Error reading thumbnail file %s: %v", thumbPath, err)
-		}
-		return
-	}
-
-	if err := hybridDB.Write(index, checksum, data); err != nil {
-		logger.Errorf("Error writing thumbnail to hybrid DB for checksum %s: %v", checksum, err)
-		return
-	}
-
-	logger.Debugf("Migrated thumbnail for checksum %s to hybrid DB index %d", checksum, index)
-
-	if err := os.Remove(thumbPath); err != nil {
-		logger.Warnf("Error deleting filesystem thumbnail %s: %v", thumbPath, err)
-	}
+type thumbnailWork struct {
+	image     *models.Image
+	checksum  string
+	galleryID *int
 }
 
 func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool) int {
@@ -110,38 +69,71 @@ func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool)
 
 		total := len(images)
 		progress.SetTotal(total)
-		logger.Infof("Migrating %d image thumbnails to DATABASE_HYBRID storage (batch size: %d)", total, migrationBatchSize)
+		logger.Infof("Migrating %d image thumbnails to DATABASE_HYBRID storage (workers: %d, batch: %d)", total, migrationNumWorkers, migrationBatchSize)
 
+		// Create work channel
+		workChan := make(chan thumbnailWork, migrationBatchSize)
 		var wg sync.WaitGroup
+
+		// Start worker pool
 		migrated := 0
 		skipped := 0
+		var mu sync.Mutex
 
-		for i, image := range images {
-			progress.Increment()
-
-			if job.IsCancelled(ctx) {
-				logger.Info("Stopping migration due to user request")
-				break
-			}
-
-			if image == nil || image.Checksum == "" {
-				skipped++
-				continue
-			}
-
+		for i := 0; i < migrationNumWorkers; i++ {
 			wg.Add(1)
-			go func(img *models.Image) {
+			go func() {
 				defer wg.Done()
-				migrationTask.migrateThumbnail(img)
-			}(image)
-			migrated++
-
-			if (i+1)%migrationBatchSize == 0 {
-				wg.Wait()
-				logger.Infof("Migration progress: %d/%d (skipped: %d)", migrated, total, skipped)
-			}
+				for work := range workChan {
+					result := migrationTask.processThumbnail(work, mgr, hybridDB)
+					mu.Lock()
+					if result {
+						migrated++
+					} else {
+						skipped++
+					}
+					mu.Unlock()
+				}
+			}()
 		}
 
+		// Send work to channel
+		go func() {
+			defer close(workChan)
+			for i, image := range images {
+				progress.Increment()
+
+				if job.IsCancelled(ctx) {
+					break
+				}
+
+				if image == nil || image.Checksum == "" {
+					mu.Lock()
+					skipped++
+					mu.Unlock()
+					continue
+				}
+
+				var galleryID *int
+				if image.GalleryIDs.Loaded() && len(image.GalleryIDs.List()) > 0 {
+					id := image.GalleryIDs.List()[0]
+					galleryID = &id
+				}
+
+				workChan <- thumbnailWork{
+					image:     image,
+					checksum:  image.Checksum,
+					galleryID: galleryID,
+				}
+
+				// Log progress periodically
+				if (i+1)%500 == 0 {
+					logger.Infof("Migration progress: %d/%d (migrated: %d, skipped: %d)", i+1, total, migrated, skipped)
+				}
+			}
+		}()
+
+		// Wait for all workers to complete
 		wg.Wait()
 
 		logger.Infof("Restoring default settings...")
@@ -150,4 +142,45 @@ func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool)
 		logger.Infof("Finished migrating thumbnails: %d migrated, %d skipped", migrated, skipped)
 		return nil
 	}))
+}
+
+func (t *MigrateThumbnailsToHybridTask) processThumbnail(work thumbnailWork, mgr *Manager, hybridDB *HybridThumbnailDB) bool {
+	checksum := work.checksum
+	if checksum == "" {
+		return false
+	}
+
+	index := hybridDB.GetDBIndex(work.galleryID)
+
+	if !t.Overwrite {
+		exists, err := hybridDB.Exists(index, checksum)
+		if err == nil && exists {
+			logger.Debugf("Thumbnail already exists in hybrid DB for checksum %s", checksum)
+			return false
+		}
+	}
+
+	thumbPath := mgr.Paths.Generated.GetThumbnailPath(checksum, models.DefaultGthumbWidth)
+	data, err := os.ReadFile(thumbPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Debugf("Filesystem thumbnail not found for checksum %s", checksum)
+		} else {
+			logger.Errorf("Error reading thumbnail file %s: %v", thumbPath, err)
+		}
+		return false
+	}
+
+	if err := hybridDB.Write(index, checksum, data); err != nil {
+		logger.Errorf("Error writing thumbnail to hybrid DB for checksum %s: %v", checksum, err)
+		return false
+	}
+
+	logger.Debugf("Migrated thumbnail for checksum %s to hybrid DB index %d", checksum, index)
+
+	if err := os.Remove(thumbPath); err != nil {
+		logger.Warnf("Error deleting filesystem thumbnail %s: %v", thumbPath, err)
+	}
+
+	return true
 }
