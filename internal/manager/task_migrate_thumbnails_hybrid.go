@@ -11,6 +11,8 @@ import (
 	"github.com/stashapp/stash/pkg/models"
 )
 
+const migrationBatchSize = 100 // Increased from 50 for better parallelism
+
 type MigrateThumbnailsToHybridTask struct {
 	Overwrite bool
 }
