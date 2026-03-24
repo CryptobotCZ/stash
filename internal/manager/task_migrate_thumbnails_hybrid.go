@@ -11,12 +11,6 @@ import (
 	"github.com/stashapp/stash/pkg/models"
 )
 
-const (
-	migrationBatchSize      = 100
-	migrationNumWorkers    = 16 // Parallel workers for file I/O and DB writes
-	migrationFileBatchSize = 200 // Read files in batches for better I/O
-)
-
 type MigrateThumbnailsToHybridTask struct {
 	Overwrite bool
 }
@@ -69,10 +63,21 @@ func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool)
 
 		total := len(images)
 		progress.SetTotal(total)
-		logger.Infof("Migrating %d image thumbnails to DATABASE_HYBRID storage (workers: %d, batch: %d)", total, migrationNumWorkers, migrationBatchSize)
+
+		// Get config values
+		numWorkers := mgr.Config.GetThumbnailMigrationWorkers()
+		batchSize := mgr.Config.GetThumbnailMigrationBatchSize()
+		if numWorkers <= 0 {
+			numWorkers = 16
+		}
+		if batchSize <= 0 {
+			batchSize = 100
+		}
+
+		logger.Infof("Migrating %d image thumbnails to DATABASE_HYBRID storage (workers: %d, batch: %d)", total, numWorkers, batchSize)
 
 		// Create work channel
-		workChan := make(chan thumbnailWork, migrationBatchSize)
+		workChan := make(chan thumbnailWork, batchSize)
 		var wg sync.WaitGroup
 
 		// Start worker pool
@@ -80,7 +85,7 @@ func (s *Manager) MigrateThumbnailsToHybrid(ctx context.Context, overwrite bool)
 		skipped := 0
 		var mu sync.Mutex
 
-		for i := 0; i < migrationNumWorkers; i++ {
+		for i := 0; i < numWorkers; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

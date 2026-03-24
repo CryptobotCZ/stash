@@ -85,6 +85,12 @@ const (
 	ParallelTasks        = "parallel_tasks"
 	parallelTasksDefault = 1
 
+	// Thumbnail migration settings
+	ThumbnailMigrationWorkers   = "thumbnail_migration_workers"
+	thumbnailMigrationWorkersDefault = 16
+	ThumbnailMigrationBatchSize = "thumbnail_migration_batch_size"
+	thumbnailMigrationBatchSizeDefault = 100
+
 	PreviewPreset                 = "preview_preset"
 	TranscodeHardwareAcceleration = "ffmpeg.hardware_acceleration"
 
@@ -987,6 +993,16 @@ func (i *Config) GetParallelTasksWithAutoDetection() int {
 	return parallelTasks
 }
 
+// GetThumbnailMigrationWorkers returns the number of workers for thumbnail migration
+func (i *Config) GetThumbnailMigrationWorkers() int {
+	return i.getInt(ThumbnailMigrationWorkers)
+}
+
+// GetThumbnailMigrationBatchSize returns the batch size for thumbnail migration
+func (i *Config) GetThumbnailMigrationBatchSize() int {
+	return i.getInt(ThumbnailMigrationBatchSize)
+}
+
 func (i *Config) GetPreviewAudio() bool {
 	return i.getBool(PreviewAudio)
 }
@@ -1822,6 +1838,8 @@ func (i *Config) setDefaultValues() {
 	i.setDefault(Port, portDefault)
 
 	i.setDefault(ParallelTasks, parallelTasksDefault)
+	i.setDefault(ThumbnailMigrationWorkers, thumbnailMigrationWorkersDefault)
+	i.setDefault(ThumbnailMigrationBatchSize, thumbnailMigrationBatchSizeDefault)
 	i.setDefault(SequentialScanning, SequentialScanningDefault)
 	i.setDefault(PreviewSegmentDuration, previewSegmentDurationDefault)
 	i.setDefault(PreviewSegments, previewSegmentsDefault)
