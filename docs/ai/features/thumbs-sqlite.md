@@ -55,13 +55,15 @@ Current filesystem-based thumbnail storage has ~1.3 million files in `generated/
 
 ## Chosen Approach
 
-**Give users a choice** with three options:
+**Give users a choice** with five options:
 
 | Config Value | Behavior | Best For |
 |--------------|----------|----------|
 | `FILESYSTEM` | Current behavior | Users with small libraries |
 | `DATABASE` | Single SQLite file | Small libraries, testing |
-| `DATABASE_PREFIXED` | 256 DBs based on checksum prefix | **Recommended** - large libraries |
+| `DATABASE_PREFIXED` | 256 DBs based on checksum prefix | Large libraries |
+| `DATABASE_PER_GALLERY` | One DB per gallery | Gallery-centric backup |
+| `DATABASE_HYBRID` | 256 DBs based on gallery_id % 256 | Large libraries with many galleries |
 
 **Default:** `FILESYSTEM` (backward compatible)
 
@@ -134,7 +136,40 @@ Current filesystem-based thumbnail storage has ~1.3 million files in `generated/
 
 ---
 
-## Migration Path
+## DATABASE_HYBRID Mode
+
+New in 0.30.x - Distributes thumbnails across 256 database files based on `gallery_id % 256`.
+
+### How it works
+
+- Images in gallery ID 0 → DB index 0
+- Images in gallery ID 256 → DB index 0  
+- Images in gallery ID 1 → DB index 1
+- Images with no gallery → DB index 255 (default)
+
+This provides even distribution while keeping related images (same gallery) in the same DB.
+
+### Configuration
+
+Add to `config.yml`:
+
+```yaml
+general:
+  image_thumbnails_storage: DATABASE_HYBRID
+  thumbnail_migration_workers: 16    # parallel workers (default: 16)
+  thumbnail_migration_batch_size: 100 # work queue size (default: 100)
+  delete_fs_thumbnail_on_load: false  # delete fs thumbnail on serve
+```
+
+### Migration
+
+Run migration task from Settings → Tasks → Migrations → "Migrate Thumbnails (Hybrid)"
+
+Or enable gradual migration:
+1. Set `image_thumbnails_storage: DATABASE_HYBRID` 
+2. Set `delete_fs_thumbnail_on_load: true`
+3. Browse your image library - thumbnails are migrated on-demand
+4. Filesystem thumbnails are deleted after serving from DB
 
 - Allow existing filesystem thumbnails to remain
 - New thumbnails go to selected storage type
@@ -230,6 +265,19 @@ CREATE INDEX idx_thumbnails_checksum ON thumbnails(checksum);
 - Apply speed PRAGMAs when opening each prefixed DB file during migration
 - Restore default PRAGMAs after migration completes (or on error)
 - Monitor disk I/O - can become bottleneck on HDDs vs SSDs
-- Progress reporting every 1000 thumbnails helps track long migrations
-- **Implemented:** Fast mode with speed PRAGMAs enabled during migration (batch size: 50)
+- Progress reporting every 500 thumbnails helps track long migrations
+- **Implemented:** Fast mode with speed PRAGMAs enabled during migration (batch size: configurable)
 - **Implemented:** Skip index during migration, added after completion
+- **Implemented:** Worker pool (configurable workers) for parallel processing
+- **Implemented:** On-demand migration via `delete_fs_thumbnail_on_load` config
+
+---
+
+## Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `image_thumbnails_storage` | string | `FILESYSTEM` | Storage mode: FILESYSTEM, DATABASE, DATABASE_PREFIXED, DATABASE_PER_GALLERY, DATABASE_HYBRID |
+| `thumbnail_migration_workers` | int | 16 | Number of parallel workers for migration task |
+| `thumbnail_migration_batch_size` | int | 100 | Work queue size for migration |
+| `delete_fs_thumbnail_on_load` | bool | false | Delete filesystem thumbnail after serving from DB (gradual migration)
