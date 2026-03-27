@@ -115,6 +115,14 @@ func (rs imageRoutes) serveThumbnailFromDB(w http.ResponseWriter, r *http.Reques
 			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
 		}
 		utils.ServeStaticContent(w, r, data)
+
+		// Delete filesystem thumbnail if configured
+		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
+			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
+			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
+			}
+		}
 		return
 	}
 
@@ -139,6 +147,14 @@ func (rs imageRoutes) serveThumbnailFromPrefixedDB(w http.ResponseWriter, r *htt
 			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
 		}
 		utils.ServeStaticContent(w, r, data)
+
+		// Delete filesystem thumbnail if configured
+		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
+			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
+			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
+			}
+		}
 		return
 	}
 
@@ -178,6 +194,14 @@ func (rs imageRoutes) serveThumbnailFromPerGalleryDB(w http.ResponseWriter, r *h
 			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
 		}
 		utils.ServeStaticContent(w, r, data)
+
+		// Delete filesystem thumbnail if configured
+		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
+			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
+			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
+			}
+		}
 		return
 	}
 
@@ -213,6 +237,14 @@ func (rs imageRoutes) serveThumbnailFromHybridDB(w http.ResponseWriter, r *http.
 			w.Header().Set("Last-Modified", modTime.Format(http.TimeFormat))
 		}
 		utils.ServeStaticContent(w, r, data)
+
+		// Delete filesystem thumbnail if configured
+		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
+			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
+			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
+				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
+			}
+		}
 		return
 	}
 

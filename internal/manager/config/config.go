@@ -90,6 +90,7 @@ const (
 	thumbnailMigrationWorkersDefault = 16
 	ThumbnailMigrationBatchSize = "thumbnail_migration_batch_size"
 	thumbnailMigrationBatchSizeDefault = 100
+	DeleteFsThumbnailOnLoad    = "delete_fs_thumbnail_on_load"
 
 	PreviewPreset                 = "preview_preset"
 	TranscodeHardwareAcceleration = "ffmpeg.hardware_acceleration"
@@ -1001,6 +1002,11 @@ func (i *Config) GetThumbnailMigrationWorkers() int {
 // GetThumbnailMigrationBatchSize returns the batch size for thumbnail migration
 func (i *Config) GetThumbnailMigrationBatchSize() int {
 	return i.getInt(ThumbnailMigrationBatchSize)
+}
+
+// GetDeleteFsThumbnailOnLoad returns whether to delete filesystem thumbnail when loading from DB
+func (i *Config) GetDeleteFsThumbnailOnLoad() bool {
+	return i.getBool(DeleteFsThumbnailOnLoad)
 }
 
 func (i *Config) GetPreviewAudio() bool {
