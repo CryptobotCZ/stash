@@ -115,6 +115,12 @@ input ConfigGeneralInput {
   videoFileNamingAlgorithm: HashAlgorithm
   "Number of parallel tasks to start during scan/generate"
   parallelTasks: Int
+  "Number of workers for thumbnail migration"
+  thumbnailMigrationWorkers: Int
+  "Batch size for thumbnail migration"
+  thumbnailMigrationBatchSize: Int
+  "Delete filesystem thumbnail when loading from DB storage"
+  deleteFsThumbnailOnLoad: Boolean
   "Include audio stream in previews"
   previewAudio: Boolean
   "Number of segments in a preview file"
