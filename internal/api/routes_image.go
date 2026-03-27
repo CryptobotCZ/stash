@@ -119,9 +119,7 @@ func (rs imageRoutes) serveThumbnailFromDB(w http.ResponseWriter, r *http.Reques
 		// Delete filesystem thumbnail if configured
 		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
 			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
-			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
-				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
-			}
+			_ = os.Remove(fsPath) // Ignore errors - file may not exist
 		}
 		return
 	}
@@ -151,9 +149,7 @@ func (rs imageRoutes) serveThumbnailFromPrefixedDB(w http.ResponseWriter, r *htt
 		// Delete filesystem thumbnail if configured
 		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
 			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
-			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
-				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
-			}
+			_ = os.Remove(fsPath) // Ignore errors - file may not exist
 		}
 		return
 	}
@@ -198,9 +194,7 @@ func (rs imageRoutes) serveThumbnailFromPerGalleryDB(w http.ResponseWriter, r *h
 		// Delete filesystem thumbnail if configured
 		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
 			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
-			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
-				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
-			}
+			_ = os.Remove(fsPath) // Ignore errors - file may not exist
 		}
 		return
 	}
@@ -241,9 +235,7 @@ func (rs imageRoutes) serveThumbnailFromHybridDB(w http.ResponseWriter, r *http.
 		// Delete filesystem thumbnail if configured
 		if mgr.Config.GetDeleteFsThumbnailOnLoad() {
 			fsPath := mgr.Paths.Generated.GetThumbnailPath(img.Checksum, models.DefaultGthumbWidth)
-			if err := os.Remove(fsPath); err != nil && !os.IsNotExist(err) {
-				logger.Warnf("Error deleting filesystem thumbnail %s: %v", fsPath, err)
-			}
+			_ = os.Remove(fsPath) // Ignore errors - file may not exist
 		}
 		return
 	}
