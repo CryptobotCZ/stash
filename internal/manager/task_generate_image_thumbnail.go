@@ -185,6 +185,19 @@ func (t *GenerateImageThumbnailTask) required() bool {
 		return true
 	}
 
+	if storageType == config.ImageThumbnailsStorageHybrid {
+		hybridDB := mgr.HybridThumbnailDB
+		if hybridDB != nil {
+			galleryID := t.findGalleryID(context.Background())
+			index := hybridDB.GetDBIndex(&galleryID)
+			exists, err := hybridDB.Exists(index, t.Image.Checksum)
+			if err == nil && exists {
+				return false
+			}
+		}
+		return true
+	}
+
 	// FILESYSTEM mode
 	thumbPath := mgr.Paths.Generated.GetThumbnailPath(t.Image.Checksum, models.DefaultGthumbWidth)
 	exists, _ := fsutil.FileExists(thumbPath)
