@@ -113,13 +113,14 @@ func (e *ThumbnailEncoder) GetThumbnail(f models.File, maxSize int) ([]byte, err
 		return e.ffmpegImageThumbnail(buf, maxSize)
 	}
 
-	// vips has issues loading files from stdin on Windows
-	if e.vips != nil {
+	// vips has issues loading files from stdin on Windows and crashes on ARM
+	// Use ffmpeg on ARM since it's more reliable
+	if e.vips != nil && runtime.GOARCH != "arm" {
 		if runtime.GOOS == "windows" && f.Base().ZipFileID == nil {
 			return e.vips.ImageThumbnailPath(f.Base().Path, maxSize)
 		}
 		if runtime.GOOS != "windows" {
-			return e.vips.ImageThumbnail(buf, maxSize)
+			return e.vips.ImageThumbnailPath(f.Base().Path, maxSize)
 		}
 	}
 	return e.ffmpegImageThumbnail(buf, maxSize)
