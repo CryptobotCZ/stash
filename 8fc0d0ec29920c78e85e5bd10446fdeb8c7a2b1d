@@ -1,0 +1,25 @@
+.dockerignore
+  67164c40cb0b2af5 56-59
+docker/build/x86_64/Dockerfile
+  67164c40cb0b2af5 1,8-14,27-33,41-43,47-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "8fc0d0ec29920c78e85e5bd10446fdeb8c7a2b1d",
+  "prompts": {
+    "67164c40cb0b2af5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d2fdb-b3f6-7461-94eb-e4dc51529cc2",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Mister P",
+      "messages": [],
+      "total_additions": 87,
+      "total_deletions": 70,
+      "accepted_lines": 74,
+      "overriden_lines": 0
+    }
+  }
+}
