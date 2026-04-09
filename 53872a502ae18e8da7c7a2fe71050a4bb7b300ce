@@ -1,0 +1,23 @@
+docker/ci/x86_64/Dockerfile
+  67164c40cb0b2af5 13-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "53872a502ae18e8da7c7a2fe71050a4bb7b300ce",
+  "prompts": {
+    "67164c40cb0b2af5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d2fdb-b3f6-7461-94eb-e4dc51529cc2",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Mister P",
+      "messages": [],
+      "total_additions": 24,
+      "total_deletions": 25,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    }
+  }
+}
