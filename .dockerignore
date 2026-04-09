@@ -53,5 +53,9 @@ ui/v2.5/build
 
 stash
 dist
+.go-cache
+.go-mod-cache
+.pnpm-store
+stash_local.tar
 
 docker
