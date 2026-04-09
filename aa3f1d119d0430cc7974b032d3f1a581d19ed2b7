@@ -1,0 +1,23 @@
+internal/api/routes_image.go
+  67164c40cb0b2af5 8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "aa3f1d119d0430cc7974b032d3f1a581d19ed2b7",
+  "prompts": {
+    "67164c40cb0b2af5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d2fdb-b3f6-7461-94eb-e4dc51529cc2",
+        "model": "gpt-5.4-mini"
+      },
+      "human_author": "Mister P",
+      "messages": [],
+      "total_additions": 572,
+      "total_deletions": 571,
+      "accepted_lines": 357,
+      "overriden_lines": 62
+    }
+  }
+}
