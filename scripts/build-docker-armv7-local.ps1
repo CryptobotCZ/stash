@@ -57,6 +57,9 @@ function Remove-DockerContainerIfExists {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $distDir = Join-Path $repoRoot "dist"
+$goCacheDir = Join-Path $repoRoot ".go-cache"
+$goModCacheDir = Join-Path $repoRoot ".go-mod-cache"
+$pnpmStoreDir = Join-Path $repoRoot ".pnpm-store"
 
 Push-Location $repoRoot
 try {
@@ -76,10 +79,21 @@ try {
         }
     }
 
+    Invoke-Step -Message "Ensuring local cache directories exist" -Action {
+        $null = New-Item -ItemType Directory -Force -Path $goCacheDir
+        $null = New-Item -ItemType Directory -Force -Path $goModCacheDir
+        $null = New-Item -ItemType Directory -Force -Path $pnpmStoreDir
+    }
+
     Remove-DockerContainerIfExists -Name $ContainerName
 
     Invoke-Step -Message "Starting compiler container $ContainerName" -Action {
-        docker run -d --name $ContainerName --mount "type=bind,source=${repoRoot},target=/stash" -w /stash $CompilerImage tail -f /dev/null | Out-Host
+        docker run -d --name $ContainerName `
+            --mount "type=bind,source=${repoRoot},target=/stash" `
+            --mount "type=bind,source=${goCacheDir},target=/root/.cache/go-build" `
+            --mount "type=bind,source=${goModCacheDir},target=/go/pkg/mod" `
+            --mount "type=bind,source=${pnpmStoreDir},target=/root/.pnpm-store" `
+            -w /stash $CompilerImage tail -f /dev/null | Out-Host
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to start compiler container '$ContainerName'."
         }

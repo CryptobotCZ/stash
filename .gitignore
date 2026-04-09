@@ -64,3 +64,6 @@ node_modules
 dist
 .DS_Store
 /.local*
+/.go-cache
+/.go-mod-cache
+/.pnpm-store
