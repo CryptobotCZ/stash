@@ -1,0 +1,23 @@
+scripts/build-docker-armv7-local.ps1
+  67164c40cb0b2af5 60-62,82-87,91-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.6",
+  "base_commit_sha": "bb609ddcf9ede72dc4336d207651bd64923b2e25",
+  "prompts": {
+    "67164c40cb0b2af5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d2fdb-b3f6-7461-94eb-e4dc51529cc2",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Mister P",
+      "messages": [],
+      "total_additions": 15,
+      "total_deletions": 1,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    }
+  }
+}
